@@ -1,9 +1,10 @@
 import { MasterClock } from '../core/clock';
+import type { Pov } from './cameras';
+export type { Pov };
 
 export type Fx = 'none' | 'crt' | 'vhs' | 'rgb';
 export type Beams = 'sweep' | 'fan' | 'strobe';
 export type Palette = { id: string; name: string; a: string; b: string; crowd: string };
-export type Pov = 'dj1' | 'dj2' | 'overhead' | 'crowd' | 'wide';
 export type Group = 'palette' | 'fx' | 'motion' | 'camera';
 export const GROUPS: readonly Group[] = ['palette', 'fx', 'motion', 'camera'];
 
@@ -17,19 +18,19 @@ export const PALETTES: readonly Palette[] = [
 export interface Motion { beams: Beams; crowd: number; speed: number }
 export const MOTIONS: readonly Motion[] = [{ beams: 'sweep', crowd: 0.35, speed: 1 }, { beams: 'fan', crowd: 0.5, speed: 0.6 }, { beams: 'strobe', crowd: 0.7, speed: 1.6 }];
 export const FX_LIST: readonly Fx[] = ['none', 'crt', 'vhs', 'rgb'];
-export const POV_LIST: readonly Pov[] = ['wide', 'dj1', 'dj2', 'overhead', 'crowd'];
+export const POV_LIST: readonly Pov[] = ['crowd', 'dj1', 'dj2', 'dj1top', 'dj2top'];
 
 export interface Look { palette: number; fx: Fx; motion: number; camera: Pov }
 
-/** Curated combinations only: each rule removes pairings that look bad (a strobe over RGB-split smears into noise; the overhead view hides the crowd response). */
+/** Curated combinations only: each rule removes pairings that look bad (a strobe over RGB-split smears into noise; the overhead views hide the crowd response). */
 export function compatible(l: Look): boolean {
     if (MOTIONS[l.motion].beams === 'strobe' && l.fx === 'rgb') return false;
-    if (l.camera === 'overhead' && MOTIONS[l.motion].beams === 'fan') return false;
+    if ((l.camera === 'dj1top' || l.camera === 'dj2top') && MOTIONS[l.motion].beams === 'fan') return false;
     if (l.fx === 'vhs' && PALETTES[l.palette].id === 'acid') return false;
     return true;
 }
 
-export const DEFAULT_LOOK: Look = { palette: 0, fx: 'crt', motion: 0, camera: 'wide' };
+export const DEFAULT_LOOK: Look = { palette: 0, fx: 'crt', motion: 0, camera: 'crowd' };
 
 /** Every curated look that keeps the locked groups of `current`. */
 export function candidates(current: Look, locked: ReadonlySet<Group>): Look[] {

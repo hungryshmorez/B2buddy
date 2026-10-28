@@ -28,8 +28,8 @@ function Meter({ value }: { value: number }) {
 }
 
 /** One station: deck + mixer channel. The player's panel drives the real station; Buddy's panel shows the same state read-only. */
-export default function StationPanel({ rt, id }: { rt: GameRuntime; id: StationId }) {
-    const mine = id === 'player';
+export default function StationPanel({ rt, id, readOnly = false, label }: { rt: GameRuntime; id: StationId; readOnly?: boolean; label?: string }) {
+    const mine = id === 'player' && !readOnly;
     const st = rt.stations[id].state(); const track = st.trackId ? rt.library.get(st.trackId) ?? null : null;
     const peaks = rt.meters()[id];
     const eff = track?.bpm ? track.bpm * st.rate : null;
@@ -44,8 +44,8 @@ export default function StationPanel({ rt, id }: { rt: GameRuntime; id: StationI
             <input type="range" min={0} max={1} step={0.005} value={value} disabled={dis} aria-label={aria} onChange={e => onChange(parseFloat(e.target.value))} />
         </label>);
     return (
-        <section className={`gstation ${mine ? 'mine' : 'theirs'}`} aria-label={mine ? 'your station' : "Buddy's station"}>
-            <header><b>{mine ? 'YOU' : 'BUDDY'}</b><span className="gtag">{st.enabled ? (st.sounding ? 'ON AIR' : st.playing ? 'ARMED' : 'READY') : 'OFF'}</span></header>
+        <section className={`gstation ${mine ? 'mine' : 'theirs'}`} aria-label={label ? `${label} station` : mine ? 'your station' : "Buddy's station"}>
+            <header><b>{label ?? (mine ? 'YOU' : 'BUDDY')}</b><span className="gtag">{st.enabled ? (st.sounding ? 'ON AIR' : st.playing ? 'ARMED' : 'READY') : 'OFF'}</span></header>
             <div className="gdeck">
                 <div className="gtitle">{track ? track.title : (mine ? 'No track loaded: pick one below' : 'empty')}</div>
                 <div className="ginfo">

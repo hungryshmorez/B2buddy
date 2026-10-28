@@ -14,9 +14,9 @@ import { MemoryStore } from './memory/store';
 import { Supervisor } from './memory/supervisor';
 import { ActionId, browserMidiDeps, MidiService } from './midi/midi';
 
-export type Mode = 'menu' | 'battle' | 'practice';
-export interface GameOptions { difficulty: Difficulty; challengeId: string; roundSeconds: number; bestOf: number; masterBpm: number; clickDuringRound: boolean }
-export const DEFAULT_OPTIONS: GameOptions = { difficulty: 'intermediate', challengeId: 'standard', roundSeconds: 90, bestOf: 3, masterBpm: 124, clickDuringRound: false };
+export type Mode = 'menu' | 'battle' | 'practice' | 'show';
+export interface GameOptions { showDj1: Difficulty; showDj2: Difficulty; showSeconds: number; difficulty: Difficulty; challengeId: string; roundSeconds: number; bestOf: number; masterBpm: number; clickDuringRound: boolean }
+export const DEFAULT_OPTIONS: GameOptions = { showDj1: 'intermediate', showDj2: 'intermediate', showSeconds: 60, difficulty: 'intermediate', challengeId: 'standard', roundSeconds: 90, bestOf: 3, masterBpm: 124, clickDuringRound: false };
 
 /** rate <-> tempo fader (0..1, centre = normal speed, +-16%) */
 export const rateToFader = (r: number) => (r - 1) / 0.32 + 0.5;
@@ -36,6 +36,9 @@ export class GameRuntime {
     backends!: Record<StationId, WebAudioBackend>;
     session: BattleSession | null = null;
     ai: BuddyAI | null = null;
+    /** AI vs AI show only: the second AI DJ, driving the station that a human drives in a battle. */
+    ai2: BuddyAI | null = null;
+    port2: CommandPort | null = null;
     port: CommandPort | null = null;
     practiceClock: MasterClock | null = null;
     mode: Mode = 'menu';
@@ -139,6 +142,30 @@ export class GameRuntime {
         this.ai.prepare(); this.emit(); return null;
     }
 
+    /**
+     * AI vs AI exhibition. Same stations, session, scorer and validated command ports as a battle; each AI acts only on its own station and no human can touch either deck.
+     * Seat names stay 'player' (AI DJ 1, left) and 'buddy' (AI DJ 2, right) inside the engine; the UI relabels them.
+     */
+    startShow(): string | null {
+        if (!this.ready) return 'Start the audio first.';
+        this.leave(); this.freshStations();
+        const ch = challengeById('standard'); if (!ch) return 'Unknown challenge.';
+        const session = new BattleSession({ time: { now: () => this.now }, stations: this.stations, library: this.library, events: (id, fn) => this.stations[id].onEvent(fn),
+            config: { masterBpm: this.options.masterBpm, roundSeconds: this.options.showSeconds, bestOf: 1 }, challenge: ch });
+        const why = session.canStart(); if (why) return why;
+        this.session = session; this.mode = 'show'; this.matchId = 's' + Date.now().toString(36);
+        this.port = new CommandPort('buddy', this.stations.buddy, this.library, () => this.now);
+        this.port2 = new CommandPort('player', this.stations.player, this.library, () => this.now);
+        const seed = (Date.now() % 100000) + 1;
+        this.ai = new BuddyAI(this.port, session, DEMO_TRACKS, this.options.showDj2, () => this.now, () => ({}), seed, () => this.stations.player.state().trackId);
+        this.ai2 = new BuddyAI(this.port2, session, DEMO_TRACKS, this.options.showDj1, () => this.now, () => ({}), seed + 7919, () => this.stations.buddy.state().trackId);
+        this.decisionMark = 0; this.nextClick = Number.NaN;
+        session.onPhase(() => this.emit());
+        this.ai2.prepare(); this.ai.prepare();
+        const bad = session.startRound(); if (bad) return bad;
+        this.emit(); return null;
+    }
+
     /** The player says READY (first round) or NEXT ROUND. */
     readyUp(): string | null {
         const s = this.session; if (!s || !this.ai) return 'No battle is running.';
@@ -150,21 +177,22 @@ export class GameRuntime {
     }
 
     rematch() {
-        if (!this.session) return; const keep = this.options; this.leave(); this.options = keep;
-        const why = this.startBattle(); if (why) this.say(why);
+        if (!this.session) return; const keep = this.options; const wasShow = this.mode === 'show'; this.leave(); this.options = keep;
+        const why = wasShow ? this.startShow() : this.startBattle(); if (why) this.say(why);
     }
 
     /** Stops the frame loop (tests / page teardown). */
     dispose() { if (this.timer) clearInterval(this.timer); this.timer = null; void this.ctx?.close(); }
 
     leave() {
-        this.session = null; this.ai = null; this.port = null; this.practiceClock = null; this.mode = 'menu';
+        this.session = null; this.ai = null; this.ai2 = null; this.port2 = null; this.port = null; this.practiceClock = null; this.mode = 'menu';
         if (this.stations) { this.stations.player.pause(); this.stations.buddy.pause(); }
         this.emit();
     }
 
     private onPhase(p: Phase) {
         const s = this.session; const ai = this.ai; if (!s || !ai) return;
+        if (this.mode === 'show') { this.emit(); return; }                       // an exhibition teaches Buddy nothing: no human played
         if (p === 'roundEnd' || p === 'matchEnd') {
             const result = s.results[s.results.length - 1];
             this.supervisor.analyze({ matchId: this.matchId, difficulty: this.options.difficulty, decisions: ai.decisions.slice(this.decisionMark), result, refusedCommands: this.port?.refused ?? 0, activePrefsApplied: [] });
@@ -176,7 +204,7 @@ export class GameRuntime {
     // ---------------------------------------------------------------- the frame loop
     private update() {
         if (!this.ctx) return;
-        this.session?.tick(); this.ai?.tick();
+        this.session?.tick(); this.ai?.tick(); this.ai2?.tick();
         this.scheduleClicks();
         if (this.message && performance.now() > this.messageUntil) { this.message = ''; }
     }
@@ -204,7 +232,7 @@ export class GameRuntime {
     private get clock() { return this.session?.clock ?? this.practiceClock; }
 
     act(action: ActionId, value = 1): string | null {
-        if (!this.ready || this.mode === 'menu') return null;
+        if (!this.ready || this.mode === 'menu' || this.mode === 'show') return null;     // nobody controls a deck in an AI show
         const st = this.stations.player; const s = st.state();
         const need = (cond: boolean, msg: string) => { if (!cond) { this.say(msg); return false; } return true; };
         switch (action) {
@@ -244,7 +272,7 @@ export class GameRuntime {
         st.seek(s.positionSec - err * 60 / t.bpm); return null;
     }
     loadToPlayer(id: string): string | null {
-        const t = this.library.get(id); if (!t) return 'Unknown track.'; if (!this.ready || this.mode === 'menu') return 'Start a battle or practice first.';
+        const t = this.library.get(id); if (!t) return 'Unknown track.'; if (!this.ready || this.mode === 'menu' || this.mode === 'show') return 'Start a battle or practice first.';
         const st = this.stations.player; if (st.state().sounding && this.session?.phase !== 'live' && this.session?.phase !== 'countin') st.pause();
         st.load(t); this.say(`Loaded "${t.title}"` + (t.bpm ? '' : ' (no BPM yet: it cannot be scored for alignment)')); return null;
     }

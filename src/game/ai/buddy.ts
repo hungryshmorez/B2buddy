@@ -79,8 +79,8 @@ export class BuddyAI {
             let s = -tc * 100; let note = `needs ${(tc * 100).toFixed(1)}% tempo shift`;
             if (this.profile.selection === 'tempoKey') {
                 const k = previous ? camelotFit(previous.key, t.key) : null; if (k !== null) { s += k * 8; note += `, key ${previous!.key}->${t.key} fit ${(k * 100).toFixed(0)}%`; }
-                if (t.id === this.playerTrackId()) { s -= 50; note += ', opponent is playing it'; }
             }
+            if (t.id === this.playerTrackId()) { s -= 50; note += ', opponent is playing it'; }          // two DJs on one track is a bad show at any skill level
             return { t, s, note };
         }).sort((a, b) => b.s - a.s);
         why.text = scored[0].note; return scored[0].s === -Infinity ? usable[0] : scored[0].t;

@@ -27,6 +27,7 @@ export function Menu({ go, rt }: { go: (s: Screen) => void; rt: GameRuntime }) {
         <div className="gscreen center"><h1 className="glogo">B2BUDDY</h1>
             <nav className="gmenu" aria-label="main menu">
                 {item('PLAY', 'quick battle vs Buddy (Intermediate)', () => { rt.options = { ...rt.options, difficulty: 'intermediate', challengeId: 'standard' }; const w = rt.startBattle(); if (w) rt.say(w); else go('arena'); })}
+                {item('AI vs AI SHOW', 'watch two AI DJs battle live: five cameras, random video effects', () => { const w = rt.startShow(); if (w) rt.say(w); else go('arena'); })}
                 {item('PRACTICE', 'free play with the master metronome, no score', () => { rt.startPractice(); go('arena'); })}
                 {item('DJ BATTLE', 'choose difficulty, challenge and rules', () => go('setup'))}
                 {item('TRACK LIBRARY', 'demo tracks and your own files', () => go('library'))}
