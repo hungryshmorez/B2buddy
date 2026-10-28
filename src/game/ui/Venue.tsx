@@ -4,6 +4,7 @@ import { DEFAULT_LOOK, flashAt, Group, GROUPS, hitTime, Look, MOTIONS, PALETTES,
 import { CAMS, crowdPoints, DECK_X, DJ_HEAD_Y, DJ_X, Pov, POVS, project, V3 } from './cameras';
 import { datamoshFrame, effectById, eligibleEffects, FX_IDLE, FxState, GlPass, probeWebGl, randomEffect, SHADERS, toggleEffect, TrippyId } from '../fx/trippy';
 import { BendrEngine, EffectEntry } from '../video/bendrEngine';
+import { formatReport, glRenderer, PerfMeter, ratePerSec } from '../perf';
 
 const W = 640, H = 300;
 const STATIONS = ['player', 'buddy'] as const;
@@ -26,6 +27,25 @@ export default function Venue({ rt, show = false }: { rt: GameRuntime; show?: bo
     const doHit = () => { const clock = rt.session?.clock ?? rt.practiceClock; hitRef.current = hitTime(rt.now, clock, quant); };
     const toggleLock = (g: Group) => setLocked(s => { const n = new Set(s); if (n.has(g)) n.delete(g); else n.add(g); return n; });
     useEffect(() => { setGlOk(probeWebGl()); }, []);
+    // performance readout (off by default): frame times of this canvas and the frame rate BENDR actually outputs, measured, with a copyable report
+    const meter = useRef(new PerfMeter()); const bendrSample = useRef<{ n: number; at: number } | null>(null); const bendrFps = useRef<number | null>(null); const rendererName = useRef('');
+    const [perfOn, setPerfOn] = useState(() => { try { return new URLSearchParams(location.search).has('perf'); } catch { return false; } }); const [perfText, setPerfText] = useState(''); const [copied, setCopied] = useState('');
+    const buildReport = () => {
+        const c = rt.ctx; if (!rendererName.current) rendererName.current = glRenderer();
+        return formatReport({ gameFps: meter.current.summary(), bendrFps: bendrFps.current, engine: engModeRef.current === 'bendr' ? 'BENDR' : 'canvas effects', effect: fxRef.current.on ? (fxRef.current.id ?? '') : '', audioBaseMs: c ? c.baseLatency * 1000 : null, audioOutMs: c && typeof c.outputLatency === 'number' ? c.outputLatency * 1000 : null, renderer: rendererName.current, userAgent: navigator.userAgent, build: String(import.meta.env.MODE) });
+    };
+    useEffect(() => {
+        if (!perfOn) { setPerfText(''); return; }
+        meter.current.reset(); bendrSample.current = null;
+        const id = window.setInterval(() => {
+            const e = engRef.current; const now = performance.now();
+            if (e && engModeRef.current === 'bendr') { const n = e.frameNo(); bendrFps.current = ratePerSec(bendrSample.current, n, now); bendrSample.current = { n, at: now }; } else bendrFps.current = null;
+            setPerfText(buildReport());
+        }, 1000);
+        return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [perfOn]);
+    const copyReport = () => { const t = buildReport(); const blocked = 'copy blocked: select the text instead'; try { void Promise.race([navigator.clipboard.writeText(t).then(() => 'copied'), new Promise<string>(r => window.setTimeout(() => r(blocked), 1500))]).then(setCopied, () => setCopied(blocked)); } catch { setCopied(blocked); } };
     const eligible: ReadonlyArray<{ id: string; name: string }> = eng === 'bendr' ? bReg : eligibleEffects(glOk);
     const [ack, setAck] = useState(rt.flashingAck); const [flashOn, setFlashOn] = useState(rt.allowFlashing);
     const setFlashing = (allow: boolean) => {
@@ -65,6 +85,7 @@ export default function Venue({ rt, show = false }: { rt: GameRuntime; show?: bo
             layers.current.set(id, l); return l;
         };
         const draw = (t: number) => {
+            meter.current.tick(t);
             const c = ref.current; if (c) {
                 const g = c.getContext('2d')!; const w = c.width, h = c.height; const L = lookRef.current; const pal = PALETTES[L.palette]; const mo = MOTIONS[L.motion]; const cam = CAMS[L.camera];
                 const lvl = rt.ready ? rt.masterLevel() : 0; const beat = rt.session?.clock ? rt.session.clock.beatAt(rt.now) : t / 480; const pulse = Math.pow(1 - (beat - Math.floor(beat)), 3) * (0.3 + lvl); const flash = flashAt(rt.now, hitRef.current);
@@ -119,6 +140,12 @@ export default function Venue({ rt, show = false }: { rt: GameRuntime; show?: bo
                 {eng === 'canvas' && showing && fxs.id === 'crt' && <div className="tfx-over tfx-crt" data-effect="crt" aria-hidden="true" />}
                 {eng === 'canvas' && showing && fxs.id === 'vhs' && <div className="tfx-over tfx-vhs" data-effect="vhs" aria-hidden="true" />}
             </div>
+            <div className="gcams" role="group" aria-label="performance">
+                <button className={perfOn ? 'on' : ''} aria-pressed={perfOn} data-testid="perf-toggle" onClick={() => { setPerfOn(v => !v); setCopied(''); }} title="Measure this device's frame rate with BENDR on and off">PERFORMANCE {perfOn ? 'ON' : 'OFF'}</button>
+                {perfOn && <button onClick={copyReport} data-testid="perf-copy">COPY REPORT</button>}
+                {copied && <small className="gnote" role="status">{copied}</small>}
+            </div>
+            {perfOn && <pre className="gnote" data-testid="perf" style={{ whiteSpace: 'pre-wrap', userSelect: 'text' }}>{perfText || 'measuring…'}</pre>}
             <div className="gcams" role="group" aria-label="camera views">
                 {POVS.map(p => <button key={p.id} className={pov === p.id ? 'on' : ''} aria-pressed={pov === p.id} onClick={() => setPov(p.id)}>{p.label}</button>)}
             </div>
