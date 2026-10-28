@@ -15,23 +15,24 @@ export const TRIPPY_EFFECTS: readonly TrippyEffect[] = [
     { id: 'crt', name: 'CRT Screen', kind: 'css', source: 'effects.css · .crt-effect scanlines + flicker (ported)' },
     { id: 'vhs', name: 'VHS Tracking', kind: 'css', source: 'effects.css · .vhs-tracking band + tracking keyframes (ported)' },
 ];
-export const effectById = (id: TrippyId | null) => TRIPPY_EFFECTS.find(e => e.id === id) ?? null;
+export const effectById = (id: string | null) => TRIPPY_EFFECTS.find(e => e.id === id) ?? null;
 
 /** The selection a person made: which effect, and whether it is showing. OFF keeps the selection. */
-export interface FxState { id: TrippyId | null; on: boolean }
+/** `id` is an effect id from whichever registry is active: BENDR presets ('bendr:12') or the canvas fallback ('liquid', ...). */
+export interface FxState { id: string | null; on: boolean }
 export const FX_IDLE: FxState = { id: null, on: false };
 
 /** Effects that can run here. WebGL ones drop out when the browser cannot compile them; the rest need nothing special. */
 export function eligibleEffects(webgl: boolean): readonly TrippyEffect[] { return TRIPPY_EFFECTS.filter(e => e.kind !== 'webgl' || webgl); }
 
 /** RANDOM EFFECT: a random eligible effect, never the one already selected when another exists; always ON. Returns null when nothing is eligible. */
-export function randomEffect(state: FxState, eligible: readonly TrippyEffect[], rnd: () => number): FxState | null {
+export function randomEffect(state: FxState, eligible: ReadonlyArray<{ id: string }>, rnd: () => number): FxState | null {
     if (!eligible.length) return null;
     const pool = eligible.length > 1 ? eligible.filter(e => e.id !== state.id) : eligible;
     return { id: pool[Math.min(pool.length - 1, Math.floor(rnd() * pool.length))].id, on: true };
 }
 /** ON/OFF: flips visibility and keeps the selected effect. With nothing selected, turning ON picks a random one. */
-export function toggleEffect(state: FxState, eligible: readonly TrippyEffect[], rnd: () => number): FxState | null {
+export function toggleEffect(state: FxState, eligible: ReadonlyArray<{ id: string }>, rnd: () => number): FxState | null {
     if (state.id === null) return state.on ? { id: null, on: false } : randomEffect(state, eligible, rnd);
     return { id: state.id, on: !state.on };
 }

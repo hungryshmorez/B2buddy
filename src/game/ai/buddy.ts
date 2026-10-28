@@ -4,6 +4,7 @@ import { CommandPort } from '../core/commands';
 import { camelotFit } from '../core/scoring';
 import { bestRate } from '../core/tempo';
 import { GameTrack } from '../core/types';
+import type { BrainRank, DjBrain } from '../dj/brain';
 
 export type Difficulty = 'beginner' | 'intermediate' | 'expert';
 
@@ -30,7 +31,8 @@ export const PROFILES: Record<Difficulty, AiProfile> = {
 /** Durable preferences the user can teach Buddy (see memory/store.ts). Absent = use the difficulty's own behaviour. */
 export interface BuddyPrefs { phraseWait?: boolean; fadeBeats?: number; avoidFilter?: boolean }
 
-export interface Decision { time: number; beat: number; decision: string; evidence: string; action: string; kind: 'track' | 'tempo' | 'launch' | 'transition' | 'phase' | 'eq' | 'note'; offPhraseBeats?: number; prefsApplied: string[] }
+export interface Decision { time: number; beat: number; decision: string; evidence: string; action: string; kind: 'track' | 'tempo' | 'launch' | 'transition' | 'phase' | 'eq' | 'note'; offPhraseBeats?: number; prefsApplied: string[];
+    /** Which decision layer produced it, when a DJ brain was involved ('aidj-service' | 'aidj-ts-port'). Absent = Buddy's built-in rules. */ source?: string }
 
 interface Step { beat: number; name: string; run: () => void; done: boolean }
 interface Ramp { from: number; to: number; start: number; end: number; apply: (v: number) => void; fin?: boolean }
@@ -49,9 +51,11 @@ export class BuddyAI {
     private plannedRound = -1; private preparedFor = -1;
     private chosen: GameTrack[] = [];
     private lastPhaseCheck = -1;
+    private lastRank: BrainRank | null = null;
 
     constructor(private readonly port: CommandPort, private readonly session: BattleSession, private readonly tracks: readonly GameTrack[], difficulty: Difficulty,
-        private readonly now: () => number, private readonly prefs: () => BuddyPrefs = () => ({}), seed = 1, private readonly playerTrackId: () => string | null = () => null) {
+        private readonly now: () => number, private readonly prefs: () => BuddyPrefs = () => ({}), seed = 1, private readonly playerTrackId: () => string | null = () => null,
+        /** The decision layer. null = Buddy's built-in rules (the explicit fallback). Buddy still executes everything through its CommandPort. */ private readonly brain: DjBrain | null = null) {
         this.profile = PROFILES[difficulty]; this.rng = mulberry32(seed * 2654435761 >>> 0);
     }
 
@@ -74,6 +78,12 @@ export class BuddyAI {
         const usable = (pool.length ? pool : this.tracks.filter(t => t.bpm));
         if (!usable.length) return null;
         if (this.profile.selection === 'random') { const t = usable[Math.floor(this.rng() * usable.length)]; why.text = 'picked at random'; return t; }
+        if (this.brain && previous) {
+            const feasible = usable.filter(t => isFinite(this.tempoCost(t, master))); const opp = this.playerTrackId(); const avoid = new Set<string>(opp ? [opp] : []);
+            const rows = feasible.length ? this.brain.rank(previous, feasible, avoid) : [];
+            if (rows.length) { const top = rows[0]; this.lastRank = top; why.text = `AI DJ: transition score ${top.score}/100, key fit ${top.keyScore}, ${top.bpmDiff.toFixed(0)} BPM apart, overlap ${top.overlapSec}s`; return feasible.find(x => x.id === top.id)!; }
+        }
+        this.lastRank = null;
         const scored = usable.map(t => {
             const tc = this.tempoCost(t, master); if (!isFinite(tc)) return { t, s: -Infinity, note: 'tempo out of range' };
             let s = -tc * 100; let note = `needs ${(tc * 100).toFixed(1)}% tempo shift`;
@@ -137,9 +147,11 @@ export class BuddyAI {
             const w = { text: '' }; const next = this.choose(prev, w); if (!next || next.id === prev.id) continue;
             this.chosen.push(next);
             const offPhrase = Math.min(start % phrase, phrase - (start % phrase));
-            const nx = next, pv = prev, st = start;
-            this.log('track', `next: "${nx.title}" at beat ${st}`, w.text, 'planned', { prefsApplied: applied, offPhraseBeats: offPhrase });
-            const f = Math.max(0, Math.min(fade, st - 2));
+            const nx = next, pv = prev, st = start; const rk = this.lastRank;
+            const bp = this.brain && fade > 0 && pr.fadeBeats === undefined ? this.brain.plan(pv, nx) : null;     // a lesson the user taught always beats the brain
+            const fadeThis = bp ? Math.max(4, Math.min(32, Math.round(bp.overlapSec * master / 60))) : fade;
+            this.log('track', `next: "${nx.title}" at beat ${st}`, bp ? `${w.text}; AI DJ overlap ${bp.overlapSec}s = ${fadeThis} beats` : w.text, 'planned', { prefsApplied: applied, offPhraseBeats: offPhrase, ...(rk || bp ? { source: (bp ?? rk)!.source } : {}) });
+            const f = Math.max(0, Math.min(fadeThis, st - 2));
             if (f > 0) {
                 this.ramp(st - f, st - 0.5, 1, 0.15, v => this.port.exec({ type: 'volume', value: v }));
                 if (P.bassCut) this.ramp(st - f, st - 0.5, 0.5, 0.05, v => this.port.exec({ type: 'eq', band: 'low', value: v }));

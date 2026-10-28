@@ -77,3 +77,6 @@
 .tfx-vhs::before { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(0deg, rgba(0,0,0,.1), transparent 1px, rgba(0,0,0,.1) 2px); animation: tfx-tracking 8s infinite linear; opacity: .9; }
 @keyframes tfx-tracking { 0% { transform: translateY(0); } 10% { transform: translateY(-20px); } 11% { transform: translateY(0); } 50% { transform: translateY(0); } 60% { transform: translateY(20px); } 61% { transform: translateY(0); } 100% { transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .tfx-crt::after, .tfx-vhs::before { animation: none; } }
+
+/* BENDR output: the video engine's picture sits exactly over the scene canvas that feeds it */
+.bendr-out { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; background: #000; pointer-events: none; }

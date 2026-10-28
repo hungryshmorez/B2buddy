@@ -3,6 +3,8 @@ import { GameRuntime } from '../runtime';
 import { DEFAULT_LOOK, flashAt, Group, GROUPS, hitTime, Look, MOTIONS, PALETTES, shuffle } from './visuals';
 import { CAMS, crowdPoints, DECK_X, DJ_HEAD_Y, DJ_X, Pov, POVS, project, V3 } from './cameras';
 import { datamoshFrame, effectById, eligibleEffects, FX_IDLE, FxState, GlPass, probeWebGl, randomEffect, SHADERS, toggleEffect, TrippyId } from '../fx/trippy';
+import { BendrEngine, EffectEntry } from '../video/bendrEngine';
+import { formatReport, glRenderer, PerfMeter, ratePerSec } from '../perf';
 
 const W = 640, H = 300;
 const STATIONS = ['player', 'buddy'] as const;
@@ -16,16 +18,61 @@ export default function Venue({ rt, show = false }: { rt: GameRuntime; show?: bo
     const ref = useRef<HTMLCanvasElement>(null); const stack = useRef<HTMLDivElement>(null);
     const [look, setLook] = useState<Look>({ ...DEFAULT_LOOK, camera: show ? 'crowd' : DEFAULT_LOOK.camera }); const [locked, setLocked] = useState<Set<Group>>(new Set()); const [quant, setQuant] = useState(true); const [note, setNote] = useState('');
     const [glOk, setGlOk] = useState(false); const [fxs, setFxs] = useState<FxState>(FX_IDLE); const [fxNote, setFxNote] = useState('');
+    // video engine: BENDR is primary; the canvas effects below are the explicit fallback and are labelled as such
+    const [eng, setEng] = useState<'starting' | 'bendr' | 'canvas'>(rt.videoPref === 'bendr' ? 'starting' : 'canvas'); const [engNote, setEngNote] = useState(''); const [bReg, setBReg] = useState<readonly EffectEntry[]>([]); const [bVer, setBVer] = useState('');
+    const engRef = useRef<BendrEngine | null>(null); const engModeRef = useRef(eng); engModeRef.current = eng; const vidRef = useRef<HTMLVideoElement>(null);
     const lookRef = useRef(look); lookRef.current = look; const hitRef = useRef<number | null>(null); const fxRef = useRef(fxs); fxRef.current = fxs;
     const pov = look.camera; const setPov = (c: Pov) => setLook(l => ({ ...l, camera: c }));
     const doShuffle = () => { const r = shuffle(look, locked, Math.random); setLook(r.look); setNote(r.note ?? `${PALETTES[r.look.palette].name} · ${MOTIONS[r.look.motion].beams} · ${r.look.fx} · ${r.look.camera}`); };
     const doHit = () => { const clock = rt.session?.clock ?? rt.practiceClock; hitRef.current = hitTime(rt.now, clock, quant); };
     const toggleLock = (g: Group) => setLocked(s => { const n = new Set(s); if (n.has(g)) n.delete(g); else n.add(g); return n; });
     useEffect(() => { setGlOk(probeWebGl()); }, []);
-    const eligible = eligibleEffects(glOk);
+    // performance readout (off by default): frame times of this canvas and the frame rate BENDR actually outputs, measured, with a copyable report
+    const meter = useRef(new PerfMeter()); const bendrSample = useRef<{ n: number; at: number } | null>(null); const bendrFps = useRef<number | null>(null); const rendererName = useRef('');
+    const [perfOn, setPerfOn] = useState(() => { try { return new URLSearchParams(location.search).has('perf'); } catch { return false; } }); const [perfText, setPerfText] = useState(''); const [copied, setCopied] = useState('');
+    const buildReport = () => {
+        const c = rt.ctx; if (!rendererName.current) rendererName.current = glRenderer();
+        return formatReport({ gameFps: meter.current.summary(), bendrFps: bendrFps.current, engine: engModeRef.current === 'bendr' ? 'BENDR' : 'canvas effects', effect: fxRef.current.on ? (fxRef.current.id ?? '') : '', audioBaseMs: c ? c.baseLatency * 1000 : null, audioOutMs: c && typeof c.outputLatency === 'number' ? c.outputLatency * 1000 : null, renderer: rendererName.current, userAgent: navigator.userAgent, build: String(import.meta.env.MODE) });
+    };
+    useEffect(() => {
+        if (!perfOn) { setPerfText(''); return; }
+        meter.current.reset(); bendrSample.current = null;
+        const id = window.setInterval(() => {
+            const e = engRef.current; const now = performance.now();
+            if (e && engModeRef.current === 'bendr') { const n = e.frameNo(); bendrFps.current = ratePerSec(bendrSample.current, n, now); bendrSample.current = { n, at: now }; } else bendrFps.current = null;
+            setPerfText(buildReport());
+        }, 1000);
+        return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [perfOn]);
+    const copyReport = () => { const t = buildReport(); const blocked = 'copy blocked: select the text instead'; try { void Promise.race([navigator.clipboard.writeText(t).then(() => 'copied'), new Promise<string>(r => window.setTimeout(() => r(blocked), 1500))]).then(setCopied, () => setCopied(blocked)); } catch { setCopied(blocked); } };
+    const eligible: ReadonlyArray<{ id: string; name: string }> = eng === 'bendr' ? bReg : eligibleEffects(glOk);
+    const [ack, setAck] = useState(rt.flashingAck); const [flashOn, setFlashOn] = useState(rt.allowFlashing);
+    const setFlashing = (allow: boolean) => {
+        rt.allowFlashing = allow; rt.savePrefs(); setFlashOn(allow); const e = engRef.current;
+        if (e) { const cleared = e.setAllowFlashing(allow); setBReg(e.registry()); if (cleared) { setFxs(FX_IDLE); setFxNote('Flashing effects are off, so the flashing effect that was active has been cleared.'); } }
+    };
+    const answerWarning = (keepFlashing: boolean) => { rt.flashingAck = true; setAck(true); setFlashing(keepFlashing); };
     const rollEffect = () => { const n = randomEffect(fxs, eligible, Math.random); if (!n) { setFxNote('No effect can run in this browser.'); return; } setFxs(n); setFxNote(''); };
     const flipEffect = () => { const n = toggleEffect(fxs, eligible, Math.random); if (!n) { setFxNote('No effect can run in this browser.'); return; } setFxs(n); setFxNote(''); };
-    const active = effectById(fxs.id); const showing = fxs.on && active;
+    const active = (eng === 'bendr' ? bReg.find(e => e.id === fxs.id) : effectById(fxs.id)) ?? null; const showing = fxs.on && active;
+    useEffect(() => { rt.events.emit({ type: 'camera.changed', camera: pov }); }, [pov, rt]);
+    const prevFx = useRef<FxState>(FX_IDLE);
+    useEffect(() => {
+        const p = prevFx.current; prevFx.current = fxs; const e = engRef.current; const engine = eng === 'bendr' ? 'bendr' : 'canvas';
+        if (fxs.id && fxs.id !== p.id) rt.events.emit({ type: 'effect.selected', id: fxs.id, name: active?.name ?? fxs.id, engine });
+        if (fxs.on !== p.on) rt.events.emit({ type: 'effect.toggled', on: fxs.on, id: fxs.id });
+        if (eng === 'bendr' && e) { if (fxs.id && e.selected?.id !== fxs.id && !e.select(fxs.id)) setFxNote('That effect could not be applied: ' + e.status().detail); e.setOn(fxs.on && !!fxs.id); }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [fxs, eng]);
+    useEffect(() => {
+        if (rt.videoPref !== 'bendr') { rt.events.emit({ type: 'engine.status', engine: 'canvas', state: 'ready', detail: 'canvas effects selected' }); return; }
+        let alive = true; const feed = ref.current!; const e = new BendrEngine({ src: import.meta.env.BASE_URL + 'bendr/index.html', feed, audio: rt.masterAudioStream(), bus: rt.events, masterBpm: rt.options.masterBpm, allowFlashing: rt.allowFlashing });
+        const off = rt.events.on('engine.status', s => { if (alive && s.engine === 'bendr' && s.state === 'failed') { setEng('canvas'); setEngNote(s.detail); setFxs(FX_IDLE); setFxNote('BENDR stopped, so the effect was cleared and the canvas effects took over.'); engRef.current = null; e.dispose(); rt.events.emit({ type: 'engine.status', engine: 'canvas', state: 'degraded', detail: 'fallback after BENDR failure: ' + s.detail }); } });
+        e.start().then(() => { if (!alive) { e.dispose(); return; } engRef.current = e; (window as unknown as { __b2bVideo?: BendrEngine }).__b2bVideo = e; e.setAllowFlashing(rt.allowFlashing); setBReg(e.registry()); setBVer(e.status().version ?? ''); setEng('bendr'); const v = vidRef.current; if (v && e.output) { v.srcObject = e.output; void v.play().catch(() => undefined); } })
+            .catch((err: Error) => { if (!alive) return; setEng('canvas'); setEngNote(err.message); rt.events.emit({ type: 'engine.status', engine: 'canvas', state: 'degraded', detail: 'fallback: ' + err.message }); });
+        return () => { alive = false; off(); e.dispose(); engRef.current = null; };
+    }, [rt]);
 
     // effect layers: one overlay canvas per effect that needs pixels, created on first use and kept; only the active one is visible
     const layers = useRef(new Map<TrippyId, { canvas: HTMLCanvasElement; gl?: GlPass }>());
@@ -38,6 +85,7 @@ export default function Venue({ rt, show = false }: { rt: GameRuntime; show?: bo
             layers.current.set(id, l); return l;
         };
         const draw = (t: number) => {
+            meter.current.tick(t);
             const c = ref.current; if (c) {
                 const g = c.getContext('2d')!; const w = c.width, h = c.height; const L = lookRef.current; const pal = PALETTES[L.palette]; const mo = MOTIONS[L.motion]; const cam = CAMS[L.camera];
                 const lvl = rt.ready ? rt.masterLevel() : 0; const beat = rt.session?.clock ? rt.session.clock.beatAt(rt.now) : t / 480; const pulse = Math.pow(1 - (beat - Math.floor(beat)), 3) * (0.3 + lvl); const flash = flashAt(rt.now, hitRef.current);
@@ -62,7 +110,7 @@ export default function Venue({ rt, show = false }: { rt: GameRuntime; show?: bo
                 g.fillStyle = 'rgba(255,255,255,0.8)'; g.font = '12px monospace'; g.fillText(POVS.find(p => p.id === L.camera)!.label.toUpperCase(), 10, 18);
 
                 // trippy effect pass over the finished picture
-                const fx = fxRef.current; const eff = fx.on ? effectById(fx.id) : null; frame++;
+                const fx = fxRef.current; const eff = fx.on && engModeRef.current === 'canvas' ? effectById(fx.id) : null; frame++;
                 for (const [id, l] of layers.current) l.canvas.style.display = eff && id === eff.id ? 'block' : 'none';
                 if (eff && (eff.kind === 'webgl' || eff.kind === 'pixel')) {
                     try {
@@ -80,19 +128,35 @@ export default function Venue({ rt, show = false }: { rt: GameRuntime; show?: bo
     }, [rt]);
     return (
         <div className="gvenue">
-            <div ref={stack} className={`gvideo fx-${look.fx}`} data-look={JSON.stringify(look)} data-camera={pov} data-tfx={showing ? fxs.id : ''}>
+            {!ack && rt.videoPref === 'bendr' && <div className="gmodal" role="dialog" aria-modal="true" aria-label="photosensitivity warning" data-testid="flash-dialog"><div className="gcard">
+                <h2>⚠ BEFORE YOU START</h2>
+                <p><b>This can produce rapid full-frame flashing.</b> STROBE and INV FLICKER presets, and the feedback presets, can run at rates that are unsafe for people with photosensitive epilepsy. There is no rate ceiling, because a ceiling would make some of the effects useless.</p>
+                <p>If you are projecting to a room, treat that as your responsibility: check the material before you show it, and warn people at the door. You can switch flashing effects off at any time with the FLASHING EFFECTS button.</p>
+                <p className="gnote">Warning text carried over from BENDR, the video engine.</p>
+                <div className="gactions"><button className="primary" onClick={() => answerWarning(true)}>UNDERSTOOD: KEEP FLASHING EFFECTS ON</button><button onClick={() => answerWarning(false)}>TURN FLASHING EFFECTS OFF</button></div></div></div>}
+            <div ref={stack} className={`gvideo fx-${look.fx}`} data-look={JSON.stringify(look)} data-camera={pov} data-engine={eng} data-tfx={showing ? fxs.id : ''}>
                 <canvas ref={ref} width={W} height={H} aria-label={`club camera view: ${POVS.find(p => p.id === pov)!.label}`} />
-                {showing && fxs.id === 'crt' && <div className="tfx-over tfx-crt" data-effect="crt" aria-hidden="true" />}
-                {showing && fxs.id === 'vhs' && <div className="tfx-over tfx-vhs" data-effect="vhs" aria-hidden="true" />}
+                <video ref={vidRef} className="bendr-out" muted playsInline autoPlay aria-label="BENDR video output" style={{ display: eng === 'bendr' ? 'block' : 'none' }} />
+                {eng === 'canvas' && showing && fxs.id === 'crt' && <div className="tfx-over tfx-crt" data-effect="crt" aria-hidden="true" />}
+                {eng === 'canvas' && showing && fxs.id === 'vhs' && <div className="tfx-over tfx-vhs" data-effect="vhs" aria-hidden="true" />}
             </div>
+            <div className="gcams" role="group" aria-label="performance">
+                <button className={perfOn ? 'on' : ''} aria-pressed={perfOn} data-testid="perf-toggle" onClick={() => { setPerfOn(v => !v); setCopied(''); }} title="Measure this device's frame rate with BENDR on and off">PERFORMANCE {perfOn ? 'ON' : 'OFF'}</button>
+                {perfOn && <button onClick={copyReport} data-testid="perf-copy">COPY REPORT</button>}
+                {copied && <small className="gnote" role="status">{copied}</small>}
+            </div>
+            {perfOn && <pre className="gnote" data-testid="perf" style={{ whiteSpace: 'pre-wrap', userSelect: 'text' }}>{perfText || 'measuring…'}</pre>}
             <div className="gcams" role="group" aria-label="camera views">
                 {POVS.map(p => <button key={p.id} className={pov === p.id ? 'on' : ''} aria-pressed={pov === p.id} onClick={() => setPov(p.id)}>{p.label}</button>)}
             </div>
             <div className="gcams" role="group" aria-label="video effect">
                 <button className="primary" onClick={rollEffect} disabled={!eligible.length} title="pick a random effect from the Trippy collection and turn it on">RANDOM EFFECT</button>
                 <button className={fxs.on ? 'on' : ''} aria-pressed={fxs.on} onClick={flipEffect} disabled={!eligible.length} title="turn the selected effect on or off">EFFECT {fxs.on ? 'ON' : 'OFF'}</button>
-                <small className="gnote" role="status" data-testid="fx-status" title={active?.source ?? ''}>{active ? `${active.name} · ${fxs.on ? 'ON' : 'OFF'}` : 'no effect selected'}{fxNote ? ` — ${fxNote}` : ''}</small>
-                {!glOk && <small className="gnote">WebGL effects unavailable here; the others still work.</small>}
+                <small className="gnote" role="status" data-testid="fx-status" title={active ? ('source' in active ? active.source : 'BENDR built-in preset') : ''}>{active ? `${active.name} · ${fxs.on ? 'ON' : 'OFF'}` : 'no effect selected'}{fxNote ? ` — ${fxNote}` : ''}</small>
+                <small className="gnote" data-testid="engine-status" role="status">{eng === 'bendr' ? `video engine: BENDR ${bVer} · ${bReg.length} effects` : eng === 'starting' ? 'video engine: starting BENDR…' : `video engine: canvas effects (FALLBACK${engNote ? ': ' + engNote : ''})`}</small>
+                {eng === 'canvas' && !glOk && <small className="gnote">WebGL effects unavailable here; the others still work.</small>}
+                <button className={flashOn ? 'on' : ''} aria-pressed={flashOn} data-testid="flash-toggle" onClick={() => setFlashing(!flashOn)} title="Strobe and inverse-flicker presets can cause rapid full-frame flashing. Turn them off to remove them from Random Effect.">FLASHING EFFECTS {flashOn ? 'ON' : 'OFF'}</button>
+                <small className="gnote" data-testid="flash-warning">⚠ Video effects can flash rapidly (risk for people with photosensitive epilepsy).{active && 'flashing' in active && active.flashing ? ' The active effect is a flashing one.' : ''}</small>
             </div>
             {!show && <div className="gcams" role="group" aria-label="visual shuffle">
                 <button className="primary" onClick={doShuffle} title="pick a different curated look, keeping what is locked">SHUFFLE VISUALS</button>
