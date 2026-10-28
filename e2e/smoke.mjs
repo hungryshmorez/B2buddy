@@ -1,6 +1,7 @@
 // Layout + legacy-studio smoke test (real Chromium). Checks for page errors and horizontal overflow; screenshots for a human to look at.
 import { chromium } from 'playwright'; import fs from 'node:fs';
-const URL = process.env.URL || 'http://localhost:4173/'; const OUT = 'e2e/out'; fs.mkdirSync(OUT, { recursive: true });
+// these suites test the canvas-effects engine and the battle loop; BENDR is covered by e2e/integration.mjs
+const URL = process.env.URL || 'http://localhost:4173/?engine=canvas'; const OUT = 'e2e/out'; fs.mkdirSync(OUT, { recursive: true });
 const b = await chromium.launch({ executablePath: process.env.CHROMIUM || undefined, args: ['--autoplay-policy=no-user-gesture-required'] }); const res = [];
 for (const [name, w, h] of [['tablet', 1024, 768], ['narrow', 700, 900]]) {
   const p = await (await b.newContext({ viewport: { width: w, height: h } })).newPage(); const errs = []; p.on('pageerror', e => errs.push(String(e)));

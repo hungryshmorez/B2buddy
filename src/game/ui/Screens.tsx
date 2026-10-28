@@ -27,6 +27,7 @@ export function Menu({ go, rt }: { go: (s: Screen) => void; rt: GameRuntime }) {
         <div className="gscreen center"><h1 className="glogo">B2BUDDY</h1>
             <nav className="gmenu" aria-label="main menu">
                 {item('PLAY', 'quick battle vs Buddy (Intermediate)', () => { rt.options = { ...rt.options, difficulty: 'intermediate', challengeId: 'standard' }; const w = rt.startBattle(); if (w) rt.say(w); else go('arena'); })}
+                {item('AI vs AI SHOW', 'watch two AI DJs battle live: five cameras, random video effects', () => { const w = rt.startShow(); if (w) rt.say(w); else go('arena'); })}
                 {item('PRACTICE', 'free play with the master metronome, no score', () => { rt.startPractice(); go('arena'); })}
                 {item('DJ BATTLE', 'choose difficulty, challenge and rules', () => go('setup'))}
                 {item('TRACK LIBRARY', 'demo tracks and your own files', () => go('library'))}
@@ -73,7 +74,7 @@ export function Library({ rt, go }: { rt: GameRuntime; go: (s: Screen) => void }
                 {rt.tracks.map(t => <tr key={t.id}><td>{t.title}<small> {t.source === 'bundled' ? '(demo)' : ''}</small></td>
                     <td>{t.source === 'user' ? <input type="number" step="0.01" min={40} max={240} defaultValue={t.bpm ?? ''} placeholder="BPM" aria-label={`BPM of ${t.title}`} onBlur={e => { const v = parseFloat(e.target.value); if (v) rt.setBpm(t.id, v, 'manual', t.firstBeatSec); }} /> : t.bpm}</td>
                     <td><span className={`gbadge o-${t.bpmOrigin}`}>{t.bpmOrigin}</span></td><td>{t.key ?? '?'} <small>{t.keyOrigin}</small></td><td>{t.loopSec ? `${t.loopSec.toFixed(1)} s loop` : `${Math.round(t.durationSec)} s`}</td>
-                    <td>{t.source === 'user' && <button onClick={() => setNote(rt.estimate(t.id))}>ESTIMATE BPM</button>}</td></tr>)}</tbody></table>
+                    <td>{t.source === 'user' && <button onClick={() => setNote(rt.estimate(t.id))}>ESTIMATE BPM</button>}{rt.serviceState === 'connected' && <button onClick={async () => setNote(await rt.analyzeWithService(t.id))}>AI DJ ANALYSE</button>}{rt.analysis.get(t.id) && <><small data-testid={`measured-${t.id}`}> AI DJ analysed {rt.analysis.get(t.id)!.bpmBeatTrack.toFixed(1)} BPM ({rt.analysis.get(t.id)!.engine}){rt.analysis.get(t.id)!.local ? ` · key ${rt.analysis.get(t.id)!.local!.key} (estimate) · ${rt.analysis.get(t.id)!.local!.choruses.length} repeated section(s)` : ''}</small> <button onClick={() => setNote(rt.useServiceBpm(t.id))}>USE AI DJ BPM</button></>}</td></tr>)}</tbody></table>
             <div className="gactions"><button onClick={() => go('menu')}>BACK</button></div></div>);
 }
 
@@ -105,7 +106,7 @@ export function Training({ rt, go }: { rt: GameRuntime; go: (s: Screen) => void 
 }
 
 export function Settings({ rt, go }: { rt: GameRuntime; go: (s: Screen) => void }) {
-    const m = rt.midi; const [mapJson, setMapJson] = useState(''); const [, bump] = useState(0);
+    const m = rt.midi; const [mapJson, setMapJson] = useState(''); const [, bump] = useState(0); const [url, setUrl] = useState(rt.serviceUrl); const bs = rt.brainStatus();
     return (
         <div className="gscreen"><h2>SETTINGS</h2>
             <section><h3>MIDI controller</h3>
@@ -119,6 +120,18 @@ export function Settings({ rt, go }: { rt: GameRuntime; go: (s: Screen) => void 
                 <div className="gactions"><button onClick={() => setMapJson(m.exportMapping())}>EXPORT MAPPING</button><button onClick={() => { if (!m.importMapping(mapJson)) rt.say('That mapping is not valid.'); bump(n => n + 1); }}>IMPORT FROM BOX</button><button onClick={() => m.clearBindings()}>CLEAR ALL</button></div>
                 <textarea value={mapJson} onChange={e => setMapJson(e.target.value)} aria-label="mapping json" placeholder="paste a mapping here to import" /></section>
             <section><h3>Keyboard & mouse (always available)</h3><p className="gnote">Space play/pause · C cue · M match tempo · B start on beat · A align · Enter ready/next round · ↑/↓ volume · ←/→ tempo · 1/2/3 kill or restore low/mid/high · [ ] filter, \ reset filter.</p></section>
+            <section aria-label="DJ brain and video engine"><h3>DJ brain (AI DJ)</h3>
+                <label className="chk"><input type="radio" name="brain" checked={rt.brainPref === 'aidj'} onChange={() => { rt.setBrainPref('aidj'); bump(n => n + 1); }} /> AI DJ decides track choice and transition length (Intermediate / Expert)</label>
+                <label className="chk"><input type="radio" name="brain" checked={rt.brainPref === 'rules'} onChange={() => { rt.setBrainPref('rules'); bump(n => n + 1); }} /> Buddy's built-in rules only</label>
+                <p role="status" data-testid="brain-status">Now using: <b>{bs.mode === 'service' ? 'AI DJ service (the fork\'s own Python)' : bs.mode === 'ts-port' ? 'AI DJ logic, in-browser port' : "Buddy's built-in rules"}</b> · {bs.detail}{bs.mode !== 'rules' ? ` · ${bs.fallbackCalls} fallback calls` : ''}</p>
+                <p className="gnote">Optional AI DJ service: run <code>python services/aidj/server.py</code> on this computer, then connect. It measures real BPM/beats with librosa and answers the same decisions from the fork's Python. No OpenAI key is used or sent anywhere. A web-hosted page may ask your browser for permission to reach your own computer.</p>
+                <div className="gactions"><input value={url} onChange={e => setUrl(e.target.value)} aria-label="AI DJ service URL" /><button className="primary" disabled={rt.serviceState === 'connecting'} onClick={async () => { await rt.connectService(url); bump(n => n + 1); }}>{rt.serviceState === 'connecting' ? 'CONNECTING…' : 'CONNECT SERVICE'}</button><button onClick={() => { rt.disconnectService(); bump(n => n + 1); }} disabled={rt.serviceState !== 'connected'}>DISCONNECT</button></div>
+                <p role="status" data-testid="service-status">Service: {rt.serviceState}{rt.serviceError ? ` — ${rt.serviceError}` : ''}</p>
+                <h3>Video engine (BENDR)</h3>
+                <label className="chk"><input type="radio" name="video" checked={rt.videoPref === 'bendr'} onChange={() => { rt.videoPref = 'bendr'; rt.savePrefs(); bump(n => n + 1); }} /> BENDR (the real video-mixing engine)</label>
+                <label className="chk"><input type="radio" name="video" checked={rt.videoPref === 'canvas'} onChange={() => { rt.videoPref = 'canvas'; rt.savePrefs(); bump(n => n + 1); }} /> Canvas effects (lightweight fallback)</label>
+                <label className="chk"><input type="checkbox" checked={rt.allowFlashing} onChange={e => { rt.allowFlashing = e.target.checked; rt.savePrefs(); bump(n => n + 1); }} /> Include strobe / flicker presets in Random Effect (rapid full-frame flashing: not safe for people with photosensitive epilepsy; also switchable in the arena)</label>
+                <p className="gnote">Video engine and flashing changes apply the next time you enter the arena.</p></section>
             <section><h3>Audio</h3><p className="gnote">Sample rate {rt.ctx?.sampleRate ?? '-'} Hz · reported output latency {rt.ctx ? ((rt.ctx.outputLatency ?? rt.ctx.baseLatency) * 1000).toFixed(0) : '-'} ms. Browsers cannot play a separate headphone cue, so there is no PFL: Buddy's metronome and count-in clicks play through the same output.</p>
                 <label>Master volume <input type="range" min={0} max={1} step={0.01} defaultValue={0.9} onChange={e => rt.act('master.volume', +e.target.value)} aria-label="master volume" /></label></section>
             <div className="gactions"><button onClick={() => go('menu')}>BACK</button></div></div>);
@@ -128,7 +141,7 @@ export function Credits({ go }: { go: (s: Screen) => void }) {
     return (
         <div className="gscreen"><h2>CREDITS & HONEST STATUS</h2>
             <p>B2Buddy by 12matt3r. Underground DJ battle arena. Long live the underground.</p>
-            <ul><li>Demo music: generated in your browser from code, original, no samples.</li><li>Opponent: Buddy is a rule-based DJ with three difficulty levels, no network or external AI service.</li>
+            <ul><li>Demo music: generated in your browser from code, original, no samples.</li><li>Opponent: Buddy executes every action through a validated command port. Its track and transition choices come from the AI DJ decision logic (an in-browser port, or the fork's own Python if you connect the local service) or, if you switch that off, Buddy's built-in rules. No language model, no OpenAI calls.</li><li>Video: the real BENDR engine (MIT, Steve Blythe), with canvas effects from the supplied Trippy package as the fallback. AI DJ logic: AI DJ Mixing System (MIT, Kuchi Chaitanya Krishna Deepak).</li>
                 <li>Crowd and lights in the venue are decoration that react to the audio; there is no crowd vote or simulated spectator score.</li><li>Scores are measured from what was played (see the results screen).</li>
                 <li>Not in this build: online play, Dual Deck Showdown, stem separation, key detection, recording, career/XP.</li></ul>
             <div className="gactions"><button onClick={() => go('menu')}>BACK</button></div></div>);

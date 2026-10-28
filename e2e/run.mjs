@@ -3,7 +3,8 @@
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 
-const URL = process.env.URL || 'http://localhost:4173/';
+// these suites test the canvas-effects engine and the battle loop; BENDR is covered by e2e/integration.mjs
+const URL = process.env.URL || 'http://localhost:4173/?engine=canvas';
 const OUT = process.env.OUT || 'e2e/out'; fs.mkdirSync(OUT, { recursive: true });
 const report = []; const ok = (name, cond, extra = '') => { report.push({ name, pass: !!cond, extra }); console.log(cond ? 'PASS' : 'FAIL', name, extra); };
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || undefined, args: ['--autoplay-policy=no-user-gesture-required'] });
@@ -68,9 +69,9 @@ await page.click('button:has-text("REMATCH")'); await page.waitForSelector('text
 ok('rematch starts a fresh match', await page.evaluate(() => window.__b2b.session.round === 0 && window.__b2b.session.results.length === 0 && window.__b2b.stations.player.state().trackId === null));
 
 // ---- camera + effect switchers
-for (const l of ['DJ 1 (you)', 'DJ 2 (Buddy)', 'Overhead', 'Crowd', 'Wide show']) await page.click(`.gcams button:has-text("${l}")`);
-await page.click('.gcams button[aria-label="visual effect"]'); await page.screenshot({ path: `${OUT}/06-camera.png` });
-ok('five camera views and the effect switch respond', true);
+const camIds = []; for (const [l, id] of [['DJ 1 POV', 'dj1'], ['DJ 2 POV', 'dj2'], ['DJ 1 Overhead', 'dj1top'], ['DJ 2 Overhead', 'dj2top'], ['Crowd Camera', 'crowd']]) { await page.click(`.gcams button:has-text("${l}")`); camIds.push(await page.getAttribute('.gvideo', 'data-camera') === id); }
+await page.click('button:has-text("RANDOM EFFECT")'); await sleep(300); await page.screenshot({ path: `${OUT}/06-camera.png` });
+ok('five camera views and the effect switch respond', camIds.every(Boolean) && (await page.getAttribute('.gvideo', 'data-tfx')) !== '');
 
 // ---- practice mode
 await page.click('button:has-text("MENU")'); await page.waitForSelector('nav[aria-label="main menu"]');

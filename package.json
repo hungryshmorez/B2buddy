@@ -8,7 +8,11 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "e2e": "node e2e/run.mjs && node e2e/smoke.mjs"
+    "e2e": "node e2e/run.mjs && node e2e/smoke.mjs",
+    "test:service": "python -m unittest services/aidj/test_service.py",
+    "e2e:show": "node e2e/show.mjs",
+    "e2e:integration": "node e2e/integration.mjs",
+    "e2e:perf": "node e2e/perf.mjs"
   },
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",

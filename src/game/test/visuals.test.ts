@@ -15,7 +15,7 @@ describe('visual shuffle / lock / hit it', () => {
         expect(seen.size).toBeGreaterThan(3);                          // the unlocked groups really vary
     });
     it('explains itself when the locks leave nothing to shuffle', () => {
-        const cur: Look = { palette: 0, fx: 'crt', motion: 0, camera: 'wide' }; const all = new Set<Group>(['palette', 'fx', 'motion', 'camera']);
+        const cur: Look = { palette: 0, fx: 'crt', motion: 0, camera: 'crowd' }; const all = new Set<Group>(['palette', 'fx', 'motion', 'camera']);
         expect(candidates(cur, all)).toHaveLength(1); const s = shuffle(cur, all, rng(1)); expect(s.look).toEqual(cur); expect(s.note).toMatch(/unlock/);
     });
     it('quantized hits land exactly on the next beat of the shared clock; unquantized are immediate', () => {

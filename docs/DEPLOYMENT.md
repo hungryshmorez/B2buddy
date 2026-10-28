@@ -22,3 +22,5 @@ Host the contents of `dist/` on any static host (the repo already has `netlify.t
 | Backends | None required. Future online play, shared leaderboards or LLM commentary would need services that do not exist yet. |
 
 Verified here: build, and a real Chromium 153 (headless, Linux) run against `vite preview` on `http://localhost`. **Not verified:** any public hosting, Firefox, Safari, Edge, mobile browsers.
+
+See docs/PUBLIC-BETA.md for the GitHub Pages subpath build (`VITE_BASE`), the Pages workflow and the beta plan.

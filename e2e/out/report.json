@@ -31,7 +31,7 @@
     {
       "name": "master output carries signal in the live round",
       "pass": true,
-      "extra": "{\"p\":0.46369361877441406,\"b\":0.7161750793457031,\"m\":0.7662560343742371}"
+      "extra": "{\"p\":0.46369361877441406,\"b\":0.7192785143852234,\"m\":0.9045451879501343}"
     },
     {
       "name": "player channel carries signal",
@@ -41,7 +41,7 @@
     {
       "name": "master peak after the limiter stays below full scale (no clipping)",
       "pass": true,
-      "extra": "peak 0.766"
+      "extra": "peak 0.905"
     },
     {
       "name": "volume fader at 0 silences the player channel (fader acts on real audio)",
@@ -51,7 +51,7 @@
     {
       "name": "LOW EQ at minimum lowers the kick-heavy channel peak",
       "pass": true,
-      "extra": "with low 0.494, without 0.199"
+      "extra": "with low 0.494, without 0.187"
     },
     {
       "name": "Buddy produced audible signal on his own station",

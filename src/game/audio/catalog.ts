@@ -15,7 +15,7 @@ export const DEMO_SPECS: readonly DemoSpec[] = [
 export function loopSeconds(s: DemoSpec) { return s.bars * 4 * 60 / s.bpm; }
 
 export function demoTrack(s: DemoSpec): GameTrack {
-    return { id: s.id, title: s.title, artist: 'B2Buddy demo', durationSec: 600, bpm: s.bpm, bpmOrigin: 'declared', firstBeatSec: 0, key: s.key, keyOrigin: 'declared', loopSec: loopSeconds(s), source: 'bundled' };
+    return { id: s.id, title: s.title, artist: 'B2Buddy demo', durationSec: 600, bpm: s.bpm, bpmOrigin: 'declared', firstBeatSec: 0, key: s.key, keyOrigin: 'declared', loopSec: loopSeconds(s), instrumental: true, source: 'bundled' };
 }
 
 export const DEMO_TRACKS: readonly GameTrack[] = DEMO_SPECS.map(demoTrack);

@@ -3,3 +3,12 @@ dist/
 build/
 .DS_Store
 *.log
+e2e/out/
+
+# Python service
+__pycache__/
+*.pyc
+venv/
+.venv/
+.env
+services/aidj/.data/

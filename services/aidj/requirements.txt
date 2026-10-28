@@ -1,0 +1,11 @@
+# AI DJ service runtime (Python 3.10+). The fork's mixing_engine.py (pydub) is NOT needed.
+numpy
+scipy
+librosa
+soundfile
+python-dotenv
+# REQUIRED, but only as a package: the fork's structure_detector.py imports openai and librosa in ONE try-block, so without the
+# openai package it silently sets librosa = None and disables its local analysis. No API key is needed or used.
+openai
+# the fork's older local engine (vendor/older_way) needs these; tensorflow is NOT needed (its downbeat model file does not exist)
+scikit-learn

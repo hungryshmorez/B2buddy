@@ -15,6 +15,12 @@ export interface GameTrack {
     keyOrigin: MetaOrigin;
     /** Bundled tracks are one short phrase that repeats; position wraps at this length. */
     loopSec?: number;
+    /** Declared genre, only when someone actually knows it (never guessed). Absent = the AI DJ's own default. */
+    /** Chorus sections found by the AI DJ's local analysis (chroma self-recurrence, repetition-based only). Absent = none found or not analysed. */
+    choruses?: Array<{ start: number; end: number }>;
+    genre?: string;
+    /** True when the track is known to have no vocals (bundled tracks are generated instrumentals). Absent = unknown. */
+    instrumental?: boolean;
     source: 'bundled' | 'user';
 }
 

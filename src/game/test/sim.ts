@@ -5,6 +5,7 @@ import { CommandPort } from '../core/commands';
 import { SilentBackend, Station } from '../core/station';
 import { GameTrack, StationId } from '../core/types';
 import { DEMO_TRACKS } from '../audio/catalog';
+import type { DjBrain } from '../dj/brain';
 
 /** A whole battle without audio hardware: a manual clock, silent backends, the real stations/session/scorer/AI. */
 export class Sim {
@@ -14,14 +15,14 @@ export class Sim {
     readonly session: BattleSession;
     readonly ai: BuddyAI; readonly port: CommandPort;
     prefs: BuddyPrefs = {};
-    constructor(difficulty: Difficulty, cfg: Partial<BattleConfig> = {}, challenge?: Challenge, seed = 1, tracks: readonly GameTrack[] = DEMO_TRACKS) {
+    constructor(difficulty: Difficulty, cfg: Partial<BattleConfig> = {}, challenge?: Challenge, seed = 1, tracks: readonly GameTrack[] = DEMO_TRACKS, brain: DjBrain | null = null) {
         const clock = () => this.t;
         this.player = new Station('player', new SilentBackend(clock)); this.buddy = new Station('buddy', new SilentBackend(clock));
         for (const tr of tracks) this.library.set(tr.id, tr);
         this.session = new BattleSession({ time: { now: clock }, stations: { player: this.player, buddy: this.buddy }, library: this.library,
             events: (id: StationId, fn) => (id === 'player' ? this.player : this.buddy).onEvent(fn), config: cfg, challenge });
         this.port = new CommandPort('buddy', this.buddy, this.library, clock);
-        this.ai = new BuddyAI(this.port, this.session, tracks, difficulty, clock, () => this.prefs, seed, () => this.player.state().trackId);
+        this.ai = new BuddyAI(this.port, this.session, tracks, difficulty, clock, () => this.prefs, seed, () => this.player.state().trackId, brain);
     }
     /** Advance time in 20 ms frames, running the session and the AI like the game loop does. */
     run(seconds: number, each?: (sim: Sim) => void) {

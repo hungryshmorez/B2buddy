@@ -13,10 +13,19 @@ import { EqBand, GameTrack, MetaOrigin, StationId } from './core/types';
 import { MemoryStore } from './memory/store';
 import { Supervisor } from './memory/supervisor';
 import { ActionId, browserMidiDeps, MidiService } from './midi/midi';
+import { EventBus } from './events';
+import { AiDjServiceBrain, AiDjTsBrain, BrainStatus, DjBrain } from './dj/brain';
+import { encodeWav } from './dj/wav';
 
-export type Mode = 'menu' | 'battle' | 'practice';
-export interface GameOptions { difficulty: Difficulty; challengeId: string; roundSeconds: number; bestOf: number; masterBpm: number; clickDuringRound: boolean }
-export const DEFAULT_OPTIONS: GameOptions = { difficulty: 'intermediate', challengeId: 'standard', roundSeconds: 90, bestOf: 3, masterBpm: 124, clickDuringRound: false };
+export type Mode = 'menu' | 'battle' | 'practice' | 'show';
+export type ServiceState = 'off' | 'connecting' | 'connected' | 'unreachable';
+/** What the AI DJ service MEASURED for one track (librosa). Shown beside the declared grid; it never silently replaces it. */
+export interface LocalAnalysis { origin: 'measured'; engine: string; bpm: number; beatCount: number; firstBeatSec: number; key: string; keyOrigin: 'estimated'; keyNote: string; energy: number; choruses: Array<{ start: number; end: number }>; chorusFallbackDiscarded: boolean; vocals: { heuristic: boolean; reliable: false } }
+export interface ServiceAnalysis { origin: 'measured'; engine: string; bpmBeatTrack: number; bpmRounded: number | null; beatCount: number; firstBeatSec: number | null; phraseBoundariesSec: number[]; local: LocalAnalysis | null; localError: string | null }
+export const DEFAULT_AIDJ_URL = 'http://127.0.0.1:8765';
+const ENGINE_KEY = 'b2buddy.engine.v1';
+export interface GameOptions { showDj1: Difficulty; showDj2: Difficulty; showSeconds: number; difficulty: Difficulty; challengeId: string; roundSeconds: number; bestOf: number; masterBpm: number; clickDuringRound: boolean }
+export const DEFAULT_OPTIONS: GameOptions = { showDj1: 'intermediate', showDj2: 'intermediate', showSeconds: 60, difficulty: 'intermediate', challengeId: 'standard', roundSeconds: 90, bestOf: 3, masterBpm: 124, clickDuringRound: false };
 
 /** rate <-> tempo fader (0..1, centre = normal speed, +-16%) */
 export const rateToFader = (r: number) => (r - 1) / 0.32 + 0.5;
@@ -36,6 +45,9 @@ export class GameRuntime {
     backends!: Record<StationId, WebAudioBackend>;
     session: BattleSession | null = null;
     ai: BuddyAI | null = null;
+    /** AI vs AI show only: the second AI DJ, driving the station that a human drives in a battle. */
+    ai2: BuddyAI | null = null;
+    port2: CommandPort | null = null;
     port: CommandPort | null = null;
     practiceClock: MasterClock | null = null;
     mode: Mode = 'menu';
@@ -50,12 +62,79 @@ export class GameRuntime {
     private listeners: Array<() => void> = [];
     private scratch = new Float32Array(512);
     clickInPractice = false;
+    /** Typed event interface between the DJ brain, the game and the video engine (see events.ts). */
+    readonly events = new EventBus(() => this.now);
+    brainPref: 'aidj' | 'rules' = 'aidj'; videoPref: 'bendr' | 'canvas' = 'bendr';
+    /** Strobe / flicker presets take part in Random Effect by default; the player can switch them out (Venue button, Settings). Persisted. */
+    allowFlashing = true;
+    /** The photosensitivity warning has been shown and answered this page load. Asked again every session on purpose. */
+    flashingAck = false;
+    serviceUrl = DEFAULT_AIDJ_URL; serviceState: ServiceState = 'off'; serviceError = '';
+    readonly analysis = new Map<string, ServiceAnalysis>();
+    private tsBrain = new AiDjTsBrain(); private svc: AiDjServiceBrain | null = null; private masterStream: MediaStream | null = null; private storage: Pick<Storage, 'getItem' | 'setItem'>;
+    private lastBeat = Number.NaN; private lastScoreAt = 0; private marks = { buddy: 0, player: 0 };
 
     constructor(storage: Storage | { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void }) {
+        this.storage = storage; this.loadEnginePrefs();
         this.memory = new MemoryStore(storage); this.supervisor = new Supervisor(this.memory);
         this.midi = new MidiService(browserMidiDeps(storage));
         this.midi.onAction((a, v) => this.act(a, v));
         for (const t of DEMO_TRACKS) this.library.set(t.id, t);
+    }
+
+    private loadEnginePrefs() {
+        try {
+            const o = JSON.parse(this.storage.getItem(ENGINE_KEY) ?? '{}') as Record<string, unknown>;
+            if (o.brain === 'rules' || o.brain === 'aidj') this.brainPref = o.brain; if (o.video === 'canvas' || o.video === 'bendr') this.videoPref = o.video;
+            if (typeof o.serviceUrl === 'string' && /^https?:\/\//.test(o.serviceUrl)) this.serviceUrl = o.serviceUrl; if (o.allowFlashing === false) this.allowFlashing = false;
+        } catch { /* corrupt or blocked storage: defaults */ }
+        try {   // test and demo switches: ?engine=canvas  ?brain=rules
+            const q = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
+            if (q.get('engine') === 'canvas' || q.get('engine') === 'bendr') this.videoPref = q.get('engine') as 'canvas' | 'bendr'; if (q.get('brain') === 'rules' || q.get('brain') === 'aidj') this.brainPref = q.get('brain') as 'rules' | 'aidj';
+        } catch { /* no location (tests) */ }
+    }
+    savePrefs() { try { this.storage.setItem(ENGINE_KEY, JSON.stringify({ brain: this.brainPref, video: this.videoPref, serviceUrl: this.serviceUrl, allowFlashing: this.allowFlashing })); } catch { /* storage blocked */ } this.emit(); }
+
+    // ---------------------------------------------------------------- DJ brain (AI DJ) selection and service connection
+    /** The decision layer Buddy uses now: the AI DJ (service if connected, else the in-process port) or null = Buddy's built-in rules (explicit fallback). */
+    currentBrain(): DjBrain | null { return this.brainPref === 'rules' ? null : this.svc ?? this.tsBrain; }
+    brainStatus(): BrainStatus { return this.brainPref === 'rules' ? { mode: 'rules', detail: "Buddy's built-in rules (AI DJ switched off)", fallbackCalls: 0, warmedPairs: 0 } : (this.svc ?? this.tsBrain).status(); }
+    setBrainPref(p: 'aidj' | 'rules') { this.brainPref = p; this.savePrefs(); const s = this.brainStatus(); this.events.emit({ type: 'brain.status', mode: s.mode, detail: s.detail }); }
+    /** Connects the browser to the local AI DJ service. Never throws: on failure the in-process AI DJ port stays in charge and the reason is kept. */
+    async connectService(url = this.serviceUrl): Promise<boolean> {
+        this.serviceUrl = url; this.serviceState = 'connecting'; this.serviceError = ''; this.emit();
+        try {
+            const b = new AiDjServiceBrain(url.replace(/\/$/, '')); await b.connect(); const n = await b.warm(this.tracks.filter(t => t.bpm));
+            if (n === 0 && b.error) throw new Error(b.error); this.svc = b; this.serviceState = 'connected';
+        } catch (e) { this.svc = null; this.serviceState = 'unreachable'; this.serviceError = (e as Error).message || 'unreachable'; }
+        this.savePrefs(); const s = this.brainStatus(); this.events.emit({ type: 'brain.status', mode: s.mode, detail: s.detail + (this.serviceError ? ` (${this.serviceError})` : '') }); return this.serviceState === 'connected';
+    }
+    disconnectService() { this.svc = null; this.serviceState = 'off'; this.serviceError = ''; this.savePrefs(); const s = this.brainStatus(); this.events.emit({ type: 'brain.status', mode: s.mode, detail: s.detail }); }
+    /** Sends one decoded track to the service and stores what librosa measured. Returns a message for the UI; never changes the track's declared grid. */
+    async analyzeWithService(id: string): Promise<string> {
+        const pcm = this.pcm.get(id); const t = this.library.get(id); if (!this.svc || !this.ctx || !pcm || !t) return 'Connect the AI DJ service first (Settings).';
+        try {
+            const r = await fetch(this.svc.url + '/v1/analyze', { method: 'POST', body: encodeWav(pcm, this.ctx.sampleRate), headers: { 'Content-Type': 'audio/wav', 'X-Track-Id': id } });
+            const j = await r.json() as ServiceAnalysis & { error?: string }; if (!r.ok) return `AI DJ could not analyse this track: ${j.error ?? r.status}`;
+            this.analysis.set(id, j); const L = j.local; const bits = [`${j.bpmBeatTrack.toFixed(1)} BPM (beat tracker, ${j.beatCount} beats)`];
+            if (L) {
+                // fill only what is UNKNOWN, always labelled an estimate; never overwrite declared / manual values
+                const cur = this.library.get(id)!; const patch: Partial<GameTrack> = {};
+                if (!cur.key && L.key) { patch.key = L.key; patch.keyOrigin = 'estimated'; bits.push(`key ${L.key} (estimate: may be the relative major/minor)`); }
+                if (L.choruses.length) { patch.choruses = L.choruses; bits.push(`${L.choruses.length} repeated section(s) found`); }
+                if (Object.keys(patch).length) { this.library.set(id, { ...cur, ...patch }); if (this.svc) void this.svc.warm(this.tracks.filter(t => t.bpm)); }
+            } else bits.push(`local key/chorus analysis unavailable (${j.localError ?? 'unknown'})`);
+            this.emit(); return `AI DJ analysed: ${bits.join(', ')}. Your BPM field is unchanged: press USE AI DJ BPM to adopt it.`;
+        } catch (e) { return 'AI DJ service did not answer: ' + (e as Error).message; }
+    }
+    /** Adopts the AI DJ's beat-tracker BPM and first beat for a track. Explicit user action; labelled an estimate (a beat tracker can be off by a few percent or an octave). */
+    useServiceBpm(id: string): string {
+        const a = this.analysis.get(id); if (!a) return 'Analyse the track first.'; const bpm = a.local?.bpm ?? a.bpmBeatTrack; const first = a.local?.firstBeatSec ?? a.firstBeatSec ?? 0;
+        return this.setBpm(id, bpm, 'estimated', first) ? `BPM set to ${bpm.toFixed(2)} (estimated by the AI DJ). Check it by ear: correct it by hand if it sounds off.` : 'That BPM is outside 40-240.';
+    }
+    /** The game's master mix as a MediaStream (post-limiter): the audio input BENDR reacts to. Taking it does not change what you hear. */
+    masterAudioStream(): MediaStream | null {
+        if (!this.ctx || !this.bus) return null; if (!this.masterStream) { const d = this.ctx.createMediaStreamDestination(); this.bus.master.connect(d); this.masterStream = d.stream; } return this.masterStream;
     }
 
     subscribe(fn: () => void) { this.listeners.push(fn); return () => { this.listeners = this.listeners.filter(l => l !== fn); }; }
@@ -80,6 +159,10 @@ export class GameRuntime {
             }
             this.backends = { player: new WebAudioBackend(this.ctx, this.bus, this.buffers), buddy: new WebAudioBackend(this.ctx, this.bus, this.buffers) };
             this.stations = { player: new Station('player', this.backends.player), buddy: new Station('buddy', this.backends.buddy) };
+            for (const id of ['player', 'buddy'] as const) this.stations[id].onEvent(e => {
+                if (e.type === 'load') this.events.emit({ type: 'track.loaded', station: id, trackId: e.trackId });
+                else if (e.type === 'play') this.events.emit({ type: 'mix.started', station: id, trackId: this.stations[id].state().trackId ?? '' });
+            });
             this.timer = setInterval(() => this.update(), 20);
             this.emit(); return true;
         } catch (e) {
@@ -133,10 +216,34 @@ export class GameRuntime {
         const why = session.canStart(); if (why) return why;
         this.session = session; this.mode = 'battle'; this.matchId = 'm' + Date.now().toString(36);
         this.port = new CommandPort('buddy', this.stations.buddy, this.library, () => this.now);
-        this.ai = new BuddyAI(this.port, session, bundled, this.options.difficulty, () => this.now, () => this.memory.buddyPrefs(), (Date.now() % 100000) + 1, () => this.stations.player.state().trackId);
-        this.decisionMark = 0; this.nextClick = Number.NaN;
+        this.ai = new BuddyAI(this.port, session, bundled, this.options.difficulty, () => this.now, () => this.memory.buddyPrefs(), (Date.now() % 100000) + 1, () => this.stations.player.state().trackId, this.currentBrain());
+        this.decisionMark = 0; this.nextClick = Number.NaN; this.marks = { buddy: 0, player: 0 };
         session.onPhase(p => this.onPhase(p));
         this.ai.prepare(); this.emit(); return null;
+    }
+
+    /**
+     * AI vs AI exhibition. Same stations, session, scorer and validated command ports as a battle; each AI acts only on its own station and no human can touch either deck.
+     * Seat names stay 'player' (AI DJ 1, left) and 'buddy' (AI DJ 2, right) inside the engine; the UI relabels them.
+     */
+    startShow(): string | null {
+        if (!this.ready) return 'Start the audio first.';
+        this.leave(); this.freshStations();
+        const ch = challengeById('standard'); if (!ch) return 'Unknown challenge.';
+        const session = new BattleSession({ time: { now: () => this.now }, stations: this.stations, library: this.library, events: (id, fn) => this.stations[id].onEvent(fn),
+            config: { masterBpm: this.options.masterBpm, roundSeconds: this.options.showSeconds, bestOf: 1 }, challenge: ch });
+        const why = session.canStart(); if (why) return why;
+        this.session = session; this.mode = 'show'; this.matchId = 's' + Date.now().toString(36);
+        this.port = new CommandPort('buddy', this.stations.buddy, this.library, () => this.now);
+        this.port2 = new CommandPort('player', this.stations.player, this.library, () => this.now);
+        const seed = (Date.now() % 100000) + 1;
+        this.ai = new BuddyAI(this.port, session, DEMO_TRACKS, this.options.showDj2, () => this.now, () => ({}), seed, () => this.stations.player.state().trackId, this.currentBrain());
+        this.ai2 = new BuddyAI(this.port2, session, DEMO_TRACKS, this.options.showDj1, () => this.now, () => ({}), seed + 7919, () => this.stations.buddy.state().trackId, this.currentBrain());
+        this.decisionMark = 0; this.nextClick = Number.NaN; this.marks = { buddy: 0, player: 0 };
+        session.onPhase(p => this.onPhase(p));
+        this.ai2.prepare(); this.ai.prepare();
+        const bad = session.startRound(); if (bad) return bad;
+        this.emit(); return null;
     }
 
     /** The player says READY (first round) or NEXT ROUND. */
@@ -150,21 +257,25 @@ export class GameRuntime {
     }
 
     rematch() {
-        if (!this.session) return; const keep = this.options; this.leave(); this.options = keep;
-        const why = this.startBattle(); if (why) this.say(why);
+        if (!this.session) return; const keep = this.options; const wasShow = this.mode === 'show'; this.leave(); this.options = keep;
+        const why = wasShow ? this.startShow() : this.startBattle(); if (why) this.say(why);
     }
 
     /** Stops the frame loop (tests / page teardown). */
     dispose() { if (this.timer) clearInterval(this.timer); this.timer = null; void this.ctx?.close(); }
 
     leave() {
-        this.session = null; this.ai = null; this.port = null; this.practiceClock = null; this.mode = 'menu';
+        this.session = null; this.ai = null; this.ai2 = null; this.port2 = null; this.port = null; this.practiceClock = null; this.mode = 'menu';
         if (this.stations) { this.stations.player.pause(); this.stations.buddy.pause(); }
         this.emit();
     }
 
     private onPhase(p: Phase) {
         const s = this.session; const ai = this.ai; if (!s || !ai) return;
+        this.lastBeat = Number.NaN;
+        if (p === 'countin') this.events.emit({ type: 'round.started', round: s.round });
+        if (p === 'roundEnd' || p === 'matchEnd') this.events.emit({ type: 'round.ended', round: s.round, winner: s.results[s.results.length - 1]?.winner ?? 'draw' });
+        if (this.mode === 'show') { this.emit(); return; }                       // an exhibition teaches Buddy nothing: no human played
         if (p === 'roundEnd' || p === 'matchEnd') {
             const result = s.results[s.results.length - 1];
             this.supervisor.analyze({ matchId: this.matchId, difficulty: this.options.difficulty, decisions: ai.decisions.slice(this.decisionMark), result, refusedCommands: this.port?.refused ?? 0, activePrefsApplied: [] });
@@ -176,9 +287,31 @@ export class GameRuntime {
     // ---------------------------------------------------------------- the frame loop
     private update() {
         if (!this.ctx) return;
-        this.session?.tick(); this.ai?.tick();
+        this.session?.tick(); this.ai?.tick(); this.ai2?.tick();
+        this.pumpEvents();
         this.scheduleClicks();
         if (this.message && performance.now() > this.messageUntil) { this.message = ''; }
+    }
+
+    /** Turns what already happened this frame into events. Bounded: at most one beat, one score and the new decisions per call. */
+    private pumpEvents() {
+        const s = this.session; const clock = s?.clock;
+        if (s && clock && s.phase === 'live') {
+            const b = Math.floor(clock.beatAt(this.now));
+            if (b >= 0 && b !== this.lastBeat) {
+                this.lastBeat = b; const bpb = s.config.beatsPerBar; this.events.emit({ type: 'beat', beat: b, bar: Math.floor(b / bpb), downbeat: b % bpb === 0 });
+                if (b > 0 && b % (bpb * 4) === 0) this.events.emit({ type: 'phrase', phrase: b / (bpb * 4) });
+            }
+            if (this.now - this.lastScoreAt >= 1 && s.scorer) { this.lastScoreAt = this.now; this.events.emit({ type: 'score', player: s.scorer.breakdown('player').total, buddy: s.scorer.breakdown('buddy').total }); }
+        }
+        for (const [ai, station] of [[this.ai, 'buddy'], [this.ai2, 'player']] as const) {
+            if (!ai) continue; const list = ai.decisions; const from = Math.min(this.marks[station], list.length); this.marks[station] = list.length;
+            for (let i = from; i < list.length; i++) {
+                const d = list[i]; this.events.emit({ type: 'dj.decision', station, kind: d.kind, decision: d.decision, source: d.source ?? 'rules' });
+                if (d.kind === 'transition') { const [a, b] = d.decision.split(' -> '); this.events.emit({ type: 'transition.started', station, from: a ?? '', to: b ?? '' }); }
+                else if (d.kind === 'launch' && d.decision.startsWith('launch after change')) { this.events.emit({ type: 'transition.completed', station, to: d.decision }); this.events.emit({ type: 'drop', station, reason: 'incoming track launched on the master beat' }); }
+            }
+        }
     }
 
     private scheduleClicks() {
@@ -204,7 +337,7 @@ export class GameRuntime {
     private get clock() { return this.session?.clock ?? this.practiceClock; }
 
     act(action: ActionId, value = 1): string | null {
-        if (!this.ready || this.mode === 'menu') return null;
+        if (!this.ready || this.mode === 'menu' || this.mode === 'show') return null;     // nobody controls a deck in an AI show
         const st = this.stations.player; const s = st.state();
         const need = (cond: boolean, msg: string) => { if (!cond) { this.say(msg); return false; } return true; };
         switch (action) {
@@ -244,7 +377,7 @@ export class GameRuntime {
         st.seek(s.positionSec - err * 60 / t.bpm); return null;
     }
     loadToPlayer(id: string): string | null {
-        const t = this.library.get(id); if (!t) return 'Unknown track.'; if (!this.ready || this.mode === 'menu') return 'Start a battle or practice first.';
+        const t = this.library.get(id); if (!t) return 'Unknown track.'; if (!this.ready || this.mode === 'menu' || this.mode === 'show') return 'Start a battle or practice first.';
         const st = this.stations.player; if (st.state().sounding && this.session?.phase !== 'live' && this.session?.phase !== 'countin') st.pause();
         st.load(t); this.say(`Loaded "${t.title}"` + (t.bpm ? '' : ' (no BPM yet: it cannot be scored for alignment)')); return null;
     }
