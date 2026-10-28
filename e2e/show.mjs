@@ -3,7 +3,8 @@
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 
-const URL = process.env.URL || 'http://localhost:4173/'; const OUT = process.env.OUT || 'e2e/out'; fs.mkdirSync(OUT, { recursive: true });
+// these suites test the canvas-effects engine and the battle loop; BENDR is covered by e2e/integration.mjs
+const URL = process.env.URL || 'http://localhost:4173/?engine=canvas'; const OUT = process.env.OUT || 'e2e/out'; fs.mkdirSync(OUT, { recursive: true });
 const sleep = ms => new Promise(r => setTimeout(r, ms)); const report = [];
 const ok = (name, cond, extra = '') => { report.push({ name, pass: !!cond, extra }); console.log(cond ? 'PASS' : 'FAIL', name, extra); };
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || undefined, args: ['--autoplay-policy=no-user-gesture-required', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });

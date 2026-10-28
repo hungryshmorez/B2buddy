@@ -1,0 +1,28 @@
+name: CI
+on:
+  push:
+    branches: [main, develop, 'integration/**', 'feature/**']
+  pull_request:
+    branches: [main, develop]
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Python deps for the AI DJ service
+        run: python -m pip install -r services/aidj/requirements.txt
+      - run: npm ci
+      - name: Vendored AI DJ and BENDR files are unmodified
+        run: (cd services/aidj/vendor && sha256sum -c SHA256SUMS) && (cd public/bendr && sha256sum -c SHA256SUMS)
+      - name: AI DJ service tests (real librosa)
+        run: python -m unittest services/aidj/test_service.py
+      - name: Unit + integration tests (includes the real Python service)
+        run: AIDJ_PYTHON=$(which python) npm test
+      - name: Type-check and build
+        run: npm run build
+      - uses: actions/upload-artifact@v4
+        with: { name: b2buddy-browser-build, path: dist }
