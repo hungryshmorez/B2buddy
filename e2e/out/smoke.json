@@ -1,0 +1,27 @@
+[
+  {
+    "name": "tablet 1024x768: no horizontal overflow, no page errors",
+    "pass": true,
+    "extra": "overflow 0px "
+  },
+  {
+    "name": "narrow 700x900: no horizontal overflow, no page errors",
+    "pass": true,
+    "extra": "overflow 0px "
+  },
+  {
+    "name": "user file decodes, starts with no BPM, estimate is ~120 and labelled estimated",
+    "pass": true,
+    "extra": "{\"before\":{\"bpm\":null,\"origin\":\"unavailable\"},\"after\":{\"bpm\":120.1,\"origin\":\"estimated\"}}"
+  },
+  {
+    "name": "SHUFFLE VISUALS keeps locked groups, varies the rest, HIT IT works, unlocking lets the palette change",
+    "pass": true,
+    "extra": "9 looks seen "
+  },
+  {
+    "name": "legacy studio still opens without page errors",
+    "pass": true,
+    "extra": ""
+  }
+]

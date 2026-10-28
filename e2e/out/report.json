@@ -1,0 +1,117 @@
+{
+  "browser": "153.0.8010.12",
+  "url": "http://localhost:4173/",
+  "platform": "linux",
+  "report": [
+    {
+      "name": "gate shown before any audio",
+      "pass": true,
+      "extra": ""
+    },
+    {
+      "name": "audio context running after the click",
+      "pass": true,
+      "extra": ""
+    },
+    {
+      "name": "arena shows both stations and the covered deck B",
+      "pass": true,
+      "extra": ""
+    },
+    {
+      "name": "READY without a track is refused with a clear message",
+      "pass": true,
+      "extra": ""
+    },
+    {
+      "name": "MATCH TEMPO sets the deck rate to master/track",
+      "pass": true,
+      "extra": ""
+    },
+    {
+      "name": "master output carries signal in the live round",
+      "pass": true,
+      "extra": "{\"p\":0.46369361877441406,\"b\":0.7161750793457031,\"m\":0.7662560343742371}"
+    },
+    {
+      "name": "player channel carries signal",
+      "pass": true,
+      "extra": ""
+    },
+    {
+      "name": "master peak after the limiter stays below full scale (no clipping)",
+      "pass": true,
+      "extra": "peak 0.766"
+    },
+    {
+      "name": "volume fader at 0 silences the player channel (fader acts on real audio)",
+      "pass": true,
+      "extra": "muted peak 0.00000"
+    },
+    {
+      "name": "LOW EQ at minimum lowers the kick-heavy channel peak",
+      "pass": true,
+      "extra": "with low 0.494, without 0.199"
+    },
+    {
+      "name": "Buddy produced audible signal on his own station",
+      "pass": true,
+      "extra": ""
+    },
+    {
+      "name": "round ends, both are scored from measurements, no AI command was refused",
+      "pass": true,
+      "extra": "{\"phase\":\"matchEnd\",\"p\":78,\"b\":92.3,\"winner\":\"buddy\",\"refused\":0}"
+    },
+    {
+      "name": "results explain the score with reasons",
+      "pass": true,
+      "extra": ""
+    },
+    {
+      "name": "rematch starts a fresh match",
+      "pass": true,
+      "extra": ""
+    },
+    {
+      "name": "five camera views and the effect switch respond",
+      "pass": true,
+      "extra": ""
+    },
+    {
+      "name": "practice: PLAY makes the deck sound",
+      "pass": true,
+      "extra": ""
+    },
+    {
+      "name": "practice: PAUSE stops it",
+      "pass": true,
+      "extra": ""
+    },
+    {
+      "name": "MIDI: API present and a clear status is shown",
+      "pass": true,
+      "extra": "{\"status\":\"denied\",\"devices\":0,\"text\":\"MIDI permission was denied. Allow it in the browser site settings, then press Connect again.\"}"
+    },
+    {
+      "name": "Buddy proposes a lesson from measured evidence and applies nothing yet",
+      "pass": true,
+      "extra": ""
+    },
+    {
+      "name": "approval makes it an active preference",
+      "pass": true,
+      "extra": ""
+    },
+    {
+      "name": "memory persists across a page reload",
+      "pass": true,
+      "extra": ""
+    },
+    {
+      "name": "no uncaught page errors",
+      "pass": true,
+      "extra": ""
+    }
+  ]
+}
