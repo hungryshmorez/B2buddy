@@ -25,8 +25,8 @@ Not built: controller-specific presets (none were available to test, so none are
 | Layer | Command | Result |
 |---|---|---|
 | Unit | `npm test` | all pass (deck 36 · jog 13 · MIDI 18 · waveform 4 · existing); deck tests checked with 6 deliberate bugs, each caught |
-| Browser, whole CDJ workflow + fake MIDI | `node e2e/cdj.mjs` | 45/45 |
-| Browser, earlier suites on the new panel | `e2e/run.mjs` 22/22, `smoke.mjs` 5/5, `show.mjs` 30/30 (one earlier show run failed once on an audio-level sample and did not reproduce in two reruns; cause not identified) | |
+| Browser, whole CDJ workflow + Settings + fake MIDI | `node e2e/cdj.mjs` | 50/50 |
+| Browser, earlier suites on the new panel | `e2e/run.mjs` 22/22, `smoke.mjs` 5/5, `show.mjs` 30/30 (one earlier show run failed once on an audio-level sample and did not reproduce in two reruns; cause not identified), BENDR `integration.mjs` 52/52 (1 skipped: needs the Python service) | |
 All browser runs: headless Chromium 153 on Linux, software GL. The fake MIDI controller goes through the app's real Web MIDI code, but it is not hardware.
 
 ## Known limits
@@ -40,3 +40,6 @@ All browser runs: headless Chromium 153 on Linux, software GL. The fake MIDI con
 Listening (headphones, real GPU not required): [ ] jog bend is smooth, no zipper noise · [ ] releasing returns to the original tempo by ear · [ ] hot-cue jumps and beat jumps land on the beat (compare against the metronome) · [ ] loops are seamless on a 4-beat loop · [ ] loop roll returns on the beat · [ ] no clicks on loop IN/OUT during playback · [ ] vinyl-mode hold/resume sounds acceptable.
 Hardware (per controller; record make/model/OS/browser): [ ] device appears after CONNECT MIDI · [ ] jog direction correct, tune encoder format / scale · [ ] ticks-per-turn feels right (Settings, default 256) · [ ] pads set and trigger A-H · [ ] hold buttons release when let go · [ ] unplug while holding a button leaves nothing stuck · [ ] fader / crossfader scaling · [ ] reconnect works. Report any controller that sends pitch-bend or 14-bit jog data.
 Touch: [ ] jog and pads on a tablet (multi-touch: one finger on the jog and one on a pad).
+
+## Chroma Awards
+Web search (not the rulebook itself) suggests Season 2 accepts a Games division with a closing date in early January 2027, but sources disagree on the exact date and on divisions, and the official rules were not read. **Platform, format, size and content requirements for game entries are unverified**: read the rules on chromaawards.com before submitting.

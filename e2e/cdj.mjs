@@ -118,6 +118,13 @@ await page.waitForFunction(() => window.__b2b.midi.status === 'granted'); ok('MI
 const learn = async (a, bytes) => { await page.evaluate(a => window.__b2b.midi.startLearn(a), a); await page.evaluate(b => window.__fakeMidi.send(b), bytes); };
 await learn('jog', [0xb0, 33, 1]); await learn('jog.touch', [0x90, 36, 100]); await learn('hotcue.5', [0x91, 40, 100]); await learn('bend.plus', [0x90, 50, 100]); await learn('beatjump.fwd', [0x90, 60, 100]);
 ok('MIDI Learn created mappings and they were saved to a profile', await page.evaluate(() => window.__b2b.midi.bindings.length === 5 && !!JSON.parse(localStorage.getItem('b2buddy.midi.v1')).profiles.Default));
+const mon = await page.textContent('[data-testid="midi-monitor"]'); ok('the input monitor shows the controller messages', /Fake DJ Controller/.test(mon), JSON.stringify(mon.slice(0, 120)));
+await page.selectOption('[aria-label="jog curve"]', 'accel'); await page.fill('[aria-label="midi jog ticks per turn"]', '128'); ok('jog settings are saved', await page.evaluate(() => { const c = JSON.parse(localStorage.getItem('b2buddy.cdj.v1')); return c.jog.curve === 'accel' && c.ticksPerTurn === 128; }));
+await page.selectOption('[aria-label="midi jog encoder format"], select[aria-label$="encoder format"]', 'offset'); ok('encoder format can be edited per binding', await page.evaluate(() => window.__b2b.midi.bindingFor('jog').encoder === 'offset'));
+await page.selectOption('select[aria-label$="encoder format"]', 'twos');
+page.once('dialog', d => d.accept('Second controller')); await page.click('button:has-text("NEW PROFILE")'); ok('a new empty profile can be created and is active', await page.evaluate(() => window.__b2b.midi.activeProfile === 'Second controller' && window.__b2b.midi.bindings.length === 0));
+await page.selectOption('[aria-label="mapping profile"]', 'Default'); ok('switching back restores the original mapping', await page.evaluate(() => window.__b2b.midi.bindings.length === 5));
+await page.fill('[aria-label="midi jog ticks per turn"]', '256'); await page.selectOption('[aria-label="jog curve"]', 'linear');
 await page.click('button:has-text("BACK")'); await page.click('button.gmenuitem:has-text("PRACTICE")'); await page.waitForSelector('[aria-label="your station"]'); await page.click('.glist button >> nth=0'); await sleep(300);
 await page.click('[aria-label="play or pause"]'); await sleep(400);
 for (let i = 0; i < 12; i++) { await page.evaluate(() => window.__fakeMidi.send([0xb0, 33, 12])); await sleep(16); } const mb = (await st()).bend;

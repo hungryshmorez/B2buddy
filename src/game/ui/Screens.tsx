@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Difficulty, PROFILES } from '../ai/buddy';
 import { CHALLENGES } from '../core/challenges';
 import { GameRuntime } from '../runtime';
@@ -107,19 +107,39 @@ export function Training({ rt, go }: { rt: GameRuntime; go: (s: Screen) => void 
 
 export function Settings({ rt, go }: { rt: GameRuntime; go: (s: Screen) => void }) {
     const m = rt.midi; const [mapJson, setMapJson] = useState(''); const [, bump] = useState(0); const [url, setUrl] = useState(rt.serviceUrl); const bs = rt.brainStatus();
+    // live input monitor: repaint when the MIDI service reports a message or a device change
+    useEffect(() => m.subscribe(() => bump(n => n + 1)), [m]);
     return (
         <div className="gscreen"><h2>SETTINGS</h2>
             <section><h3>MIDI controller</h3>
                 <p role="status">{m.statusText}</p>
                 {m.status !== 'unsupported' && m.status !== 'insecure' && <button className="primary" onClick={() => m.connect()} disabled={m.status === 'requesting'}>{m.status === 'granted' ? 'RESCAN' : 'CONNECT MIDI'}</button>}
                 <ul>{m.devices.map(d => <li key={d.id}>{d.name} — {d.connected ? 'connected' : 'disconnected'}</li>)}</ul>
-                <p className="gnote">Last message: {m.last ? `${m.last.type} ch${m.last.channel + 1} #${m.last.number} = ${(m.last.value * 127).toFixed(0)} (${m.last.device})` : 'none yet'} · {m.messageCount} received. Hardware testing status: none in this build's report.</p>
-                <table className="gtable"><thead><tr><th>Action</th><th>Control</th><th /></tr></thead><tbody>{ACTIONS.map(a => { const b = m.bindingFor(a.id); return (
-                    <tr key={a.id}><td>{a.label} <small>({a.kind})</small></td><td>{m.learning === a.id ? <b>move or press a control…</b> : b ? `${b.type === 'cc' ? 'CC' : 'Note'} ${b.number} · ch ${b.channel + 1}` : 'not mapped'}</td>
+                <p className="gnote" data-testid="midi-last">Last message: {m.last ? `${m.last.type} ch${m.last.channel + 1} #${m.last.number} = ${m.last.raw} (${m.last.device})` : 'none yet'} · {m.messageCount} received. Hardware testing status: none in this build; every mapping is made with LEARN. Generic MIDI mapping is not native CDJ support (no HID, no Pro DJ Link).</p>
+                <pre className="gnote" aria-label="midi input monitor" data-testid="midi-monitor" style={{ maxHeight: 110, overflow: 'auto' }}>{m.recent.length ? m.recent.map(x => `${x.device} · ${x.type} ch${x.channel + 1} #${x.number} = ${x.raw}`).join('\n') : 'input monitor: move or press a control on your controller'}</pre>
+                <div className="gactions" role="group" aria-label="mapping profile controls">
+                    <label className="gsel">PROFILE <select aria-label="mapping profile" value={m.activeProfile} onChange={e => { m.switchProfile(e.target.value); bump(n => n + 1); }}>{m.profileNames.map(n => <option key={n}>{n}</option>)}</select></label>
+                    <button onClick={() => { const n = window.prompt('Name for the new profile (it starts empty)'); if (n && !m.createProfile(n)) rt.say('That name is empty or already used.'); bump(n2 => n2 + 1); }}>NEW PROFILE</button>
+                    <button onClick={() => { if (window.confirm(`Delete the profile "${m.activeProfile}"?`) && !m.deleteProfile(m.activeProfile)) rt.say('The last profile cannot be deleted.'); bump(n => n + 1); }}>DELETE PROFILE</button>
+                </div>
+                <table className="gtable"><thead><tr><th>Action</th><th>Control</th><th>Options</th><th /></tr></thead><tbody>{ACTIONS.map(a => { const b = m.bindingFor(a.id); return (
+                    <tr key={a.id}><td>{a.label} <small>({a.kind})</small></td><td>{m.learning === a.id ? <b>move or press a control…</b> : b ? `${b.type === 'cc' ? 'CC' : 'Note'} ${b.number} · ch ${b.channel + 1}${b.device ? ' · ' + b.device : ''}` : 'not mapped'}</td>
+                        <td>{b && (a.kind === 'relative' || a.kind === 'continuous') && <>
+                            {a.kind === 'relative' && <select aria-label={`${a.label} encoder format`} value={b.encoder ?? 'twos'} onChange={e => { m.updateBinding(a.id, { encoder: e.target.value as 'twos' | 'offset' | 'sign' }); bump(n => n + 1); }}><option value="twos">two's complement (1 = +, 127 = −)</option><option value="offset">offset 64</option><option value="sign">sign + magnitude</option></select>}
+                            <label className="chk"><input type="checkbox" checked={!!b.invert} onChange={e => { m.updateBinding(a.id, { invert: e.target.checked }); bump(n => n + 1); }} /> invert</label>
+                            {a.kind === 'relative' && <label className="gsel">scale <input type="number" min={0.1} max={50} step={0.1} style={{ width: 56 }} value={b.scale ?? 1} onChange={e => { const v = +e.target.value; if (v > 0) { m.updateBinding(a.id, { scale: v }); bump(n => n + 1); } }} aria-label={`${a.label} scale`} /></label>}</>}</td>
                         <td>{m.learning === a.id ? <button onClick={() => m.cancelLearn()}>CANCEL</button> : <><button onClick={() => m.startLearn(a.id)} disabled={!m.usable}>LEARN</button>{b && <button onClick={() => m.removeBinding(a.id)}>CLEAR</button>}</>}</td></tr>); })}</tbody></table>
-                <div className="gactions"><button onClick={() => setMapJson(m.exportMapping())}>EXPORT MAPPING</button><button onClick={() => { if (!m.importMapping(mapJson)) rt.say('That mapping is not valid.'); bump(n => n + 1); }}>IMPORT FROM BOX</button><button onClick={() => m.clearBindings()}>CLEAR ALL</button></div>
+                <div className="gactions"><button onClick={() => setMapJson(m.exportMapping())}>EXPORT MAPPING</button><button onClick={() => { if (!m.importMapping(mapJson)) rt.say('That mapping is not valid.'); bump(n => n + 1); }}>IMPORT FROM BOX</button><button onClick={() => { if (window.confirm('Clear every mapping in this profile?')) { m.clearBindings(); bump(n => n + 1); } }}>CLEAR PROFILE</button></div>
                 <textarea value={mapJson} onChange={e => setMapJson(e.target.value)} aria-label="mapping json" placeholder="paste a mapping here to import" /></section>
-            <section><h3>Keyboard & mouse (always available)</h3><p className="gnote">Space play/pause · C cue · M match tempo · B start on beat · A align · Enter ready/next round · ↑/↓ volume · ←/→ tempo · 1/2/3 kill or restore low/mid/high · [ ] filter, \ reset filter.</p></section>
+            <section aria-label="jog wheel settings"><h3>Jog wheel</h3>
+                <label className="chk"><input type="radio" name="jogmode" checked={rt.cdj.jog.mode === 'cdj'} onChange={() => { rt.cdj.jog.mode = 'cdj'; rt.saveCdjPrefs(); bump(n => n + 1); }} /> CDJ: pitch bend while playing, nudge while paused</label>
+                <label className="chk"><input type="radio" name="jogmode" checked={rt.cdj.jog.mode === 'vinyl'} onChange={() => { rt.cdj.jog.mode = 'vinyl'; rt.saveCdjPrefs(); bump(n => n + 1); }} /> Vinyl: touching holds the sound, moving scrubs it silently (no audible scratch: the audio engine cannot do that)</label>
+                <label className="gsel">Sensitivity <input type="range" min={0.25} max={3} step={0.05} value={rt.cdj.jog.sensitivity} onChange={e => { rt.cdj.jog.sensitivity = +e.target.value; rt.saveCdjPrefs(); bump(n => n + 1); }} aria-label="jog sensitivity" /> {rt.cdj.jog.sensitivity.toFixed(2)}×</label>
+                <label className="gsel">Curve <select aria-label="jog curve" value={rt.cdj.jog.curve} onChange={e => { rt.cdj.jog.curve = e.target.value as 'linear' | 'accel'; rt.saveCdjPrefs(); bump(n => n + 1); }}><option value="linear">linear</option><option value="accel">accelerating (finer when slow)</option></select></label>
+                <label className="gsel">Max bend <select aria-label="jog max bend" value={rt.cdj.jog.maxBend} onChange={e => { rt.cdj.jog.maxBend = +e.target.value; rt.saveCdjPrefs(); bump(n => n + 1); }}>{[0.06, 0.1, 0.2, 0.35].map(v => <option key={v} value={v}>±{Math.round(v * 100)}%</option>)}</select></label>
+                <label className="gsel">MIDI jog resolution (ticks per full turn) <input type="number" min={16} max={4096} step={16} style={{ width: 70 }} value={rt.cdj.ticksPerTurn} onChange={e => { const v = +e.target.value; if (v >= 16 && v <= 4096) { rt.cdj.ticksPerTurn = v; rt.saveCdjPrefs(); bump(n => n + 1); } }} aria-label="midi jog ticks per turn" /></label>
+                <p className="gnote">Calibrate with your own controller: if the jog feels too weak or too strong, change the ticks per turn or the per-binding scale above. Not tested on hardware.</p></section>
+            <section><h3>Keyboard & mouse (always available)</h3><p className="gnote">Space play/pause · C cue (hold) · Q-I hot cues A-H (Shift+pad clears) · , . beat jump · L loop · X quantize · - = bend · M match tempo · B start on beat · A align · Enter ready/next round · ↑/↓ volume · ←/→ tempo · 1/2/3 kill or restore low/mid/high · [ ] filter, \ reset filter.</p></section>
             <section aria-label="DJ brain and video engine"><h3>DJ brain (AI DJ)</h3>
                 <label className="chk"><input type="radio" name="brain" checked={rt.brainPref === 'aidj'} onChange={() => { rt.setBrainPref('aidj'); bump(n => n + 1); }} /> AI DJ decides track choice and transition length (Intermediate / Expert)</label>
                 <label className="chk"><input type="radio" name="brain" checked={rt.brainPref === 'rules'} onChange={() => { rt.setBrainPref('rules'); bump(n => n + 1); }} /> Buddy's built-in rules only</label>
