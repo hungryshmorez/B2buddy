@@ -1,4 +1,4 @@
-import type { KeyboardEvent as RKeyboardEvent, PointerEvent as RPointerEvent } from 'react';
+import type { KeyboardEvent as RKeyboardEvent, PointerEvent as RPointerEvent, ReactNode } from 'react';
 import { BEAT_JUMP_SIZES, GameRuntime, LOOP_SIZES, TEMPO_RANGES } from '../runtime';
 import { ActionId } from '../midi/midi';
 import { StationState } from '../core/types';
@@ -10,7 +10,7 @@ const sizeLabel = (b: number) => (b < 1 ? `1/${Math.round(1 / b)}` : String(b));
 function holdProps(rt: GameRuntime, action: ActionId, disabled: boolean) {
     const up = () => { rt.act(action, 0); };
     return {
-        onPointerDown: (e: RPointerEvent<HTMLButtonElement>) => { if (disabled) return; e.currentTarget.setPointerCapture(e.pointerId); rt.act(action, 1); },
+        onPointerDown: (e: RPointerEvent<HTMLButtonElement>) => { if (disabled) return; try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* capture is a nicety: the press still counts */ } rt.act(action, 1); },
         onPointerUp: up, onPointerCancel: up, onLostPointerCapture: up,
         onKeyDown: (e: RKeyboardEvent<HTMLButtonElement>) => { if (!disabled && !e.repeat && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); e.stopPropagation(); rt.act(action, 1); } },
         onKeyUp: (e: RKeyboardEvent<HTMLButtonElement>) => { if (e.key === ' ' || e.key === 'Enter') { e.stopPropagation(); up(); } },
@@ -19,20 +19,21 @@ function holdProps(rt: GameRuntime, action: ActionId, disabled: boolean) {
 }
 
 /** The CDJ control groups: transport, hot cues A-H, beat jump, loops, tempo range, quantize, bend. Every control calls rt.act, the same path MIDI and the keyboard use. */
-export default function CdjControls({ rt, st, hasBpm }: { rt: GameRuntime; st: StationState; hasBpm: boolean }) {
+export default function CdjControls({ rt, st, hasBpm, jog }: { rt: GameRuntime; st: StationState; hasBpm: boolean; jog: ReactNode }) {
     const dis = !st.enabled; const noTrack = !st.trackId;
     const act = (a: ActionId, v = 1) => rt.act(a, v);
     const loop = st.loop; const loopLen = loop ? loop.end - loop.start : 0;
     return (
         <div className="gcdj" aria-label="CDJ controls">
+            <div className="gtop">{jog}
             <div className="gbtns" role="group" aria-label="transport">
                 <button className={`gcue ${st.previewing ? 'on' : ''}`} aria-label="cue" disabled={dis} {...holdProps(rt, 'cue.hold', dis)} title="CUE: playing = back to the cue point · paused elsewhere = set the cue point here · paused at the cue point = hold to listen, release to return">CUE</button>
                 <button onClick={() => act('play')} className={st.playing && !st.previewing ? 'on' : ''} aria-label="play or pause" disabled={dis}>{st.playing && !st.previewing ? 'PAUSE' : 'PLAY'}</button>
-                <button onClick={() => act('matchTempo')} disabled={dis} title="set this deck's tempo to the master tempo">SYNC TEMPO</button>
+                <button onClick={() => act('matchTempo')} disabled={dis} title="set this deck's tempo to the master tempo">MATCH TEMPO</button>
                 <button onClick={() => act('startOnBeat')} disabled={dis} title="start on the next bar line of the master clock">START ON BEAT</button>
                 <button onClick={() => act('align')} disabled={dis} title="nudge the playing deck onto the master beat">ALIGN</button>
                 <button className={st.quantize ? 'on' : ''} aria-pressed={st.quantize} onClick={() => act('quantize')} disabled={dis} title={hasBpm ? 'snap new cue points, hot cues and loops to the beat grid' : 'needs a known BPM to snap to a beat grid'} data-testid="quantize">QUANTIZE {st.quantize ? 'ON' : 'OFF'}</button>
-            </div>
+            </div></div>
             <div className="ghot" role="group" aria-label="hot cues A to H">
                 {HOT_LETTERS.split('').map((L, i) => { const at = st.hotCues[i]; return (
                     <button key={L} className={`gpad ${at !== null ? 'set' : ''}`} style={at !== null ? { borderColor: HOT_COLORS[i], color: HOT_COLORS[i] } : undefined} disabled={dis || noTrack} data-testid={`hot-${L}`}

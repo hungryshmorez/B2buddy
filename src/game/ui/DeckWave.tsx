@@ -11,6 +11,7 @@ const W = 480, DH = 84, OH = 30, HALF = 4;     // detail shows +-4 s around the 
  * click or drag to seek. Everything is drawn from the decoded audio and the deck's real state; with no beat grid no grid is drawn.
  */
 export default function DeckWave({ rt, id, seekable }: { rt: GameRuntime; id: StationId; seekable: boolean }) {
+    const overviewCache = useRef<{ key: string; peaks: ReturnType<typeof windowPeaks> } | null>(null);
     const det = useRef<HTMLCanvasElement>(null); const ov = useRef<HTMLCanvasElement>(null); const dragging = useRef(false); const lastSeek = useRef(0);
     const color = id === 'player' ? '#33ebff' : '#ff4ddb';
 
@@ -37,7 +38,10 @@ export default function DeckWave({ rt, id, seekable }: { rt: GameRuntime; id: St
             st.hotCues.forEach((h, i) => { if (h === null || h < t0 || h > t1) return; const cx = x(h); gd.fillStyle = HOT_COLORS[i]; gd.fillRect(cx - 1, 0, 2, DH); gd.fillRect(cx, 0, 12, 13); gd.fillStyle = '#0c0720'; gd.fillText(HOT_LETTERS[i], cx + 2, 11); });
             gd.fillStyle = '#fff'; gd.fillRect(W / 2 - 1, 0, 2, DH);
             // ---- overview
-            const ox = (t: number) => (t / total) * W; const op = windowPeaks(wave, 0, total, W);
+            const ox = (t: number) => (t / total) * W;
+            // the whole-track peaks never change for a loaded track: compute once, not every frame
+            if (overviewCache.current?.key !== `${track.id}:${total}`) overviewCache.current = { key: `${track.id}:${total}`, peaks: windowPeaks(wave, 0, total, W) };
+            const op = overviewCache.current.peaks;
             go.fillStyle = color + '99'; const omid = OH / 2;
             for (let c = 0; c < W; c++) { const q = op[c]; if (!q) continue; go.fillRect(c, omid - q.hi * omid, 1, Math.max(1, (q.hi - q.lo) * omid)); }
             if (st.loop) { go.fillStyle = st.loop.active ? 'rgba(59,255,122,0.55)' : 'rgba(59,255,122,0.2)'; go.fillRect(ox(st.loop.start), 0, Math.max(2, ox(st.loop.end) - ox(st.loop.start)), OH); }
@@ -58,7 +62,7 @@ export default function DeckWave({ rt, id, seekable }: { rt: GameRuntime; id: St
         <div className="gdw" aria-label={id === 'player' ? 'your track display' : "Buddy's track display"}>
             <canvas ref={det} width={W} height={DH} className="gdetail" data-testid={`wave-detail-${id}`} aria-label="scrolling waveform around the playhead" />
             <canvas ref={ov} width={W} height={OH} className={`gover ${seekable ? 'seekable' : ''}`} data-testid={`wave-overview-${id}`} aria-label={seekable ? 'whole track overview: click or drag to seek' : 'whole track overview'}
-                onPointerDown={e => { if (!seekable) return; e.currentTarget.setPointerCapture(e.pointerId); dragging.current = true; seekTo(e); }}
+                onPointerDown={e => { if (!seekable) return; try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* capture is a nicety */ } dragging.current = true; seekTo(e); }}
                 onPointerMove={e => { if (seekable && dragging.current) seekTo(e); }} onPointerUp={() => { dragging.current = false; }} onPointerCancel={() => { dragging.current = false; }} />
         </div>
     );

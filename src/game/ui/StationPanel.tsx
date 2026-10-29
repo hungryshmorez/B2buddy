@@ -66,7 +66,7 @@ export default function StationPanel({ rt, id, readOnly = false, label }: { rt: 
                     <b data-testid="time-readout">{track ? (remain ? '-' + fmtTime(total - posInLoop) : fmtTime(posInLoop)) : '--:--'}</b>
                     <span>{track ? `${eff ? eff.toFixed(1) + ' BPM' : 'no BPM'}${track.key ? ' · ' + track.key : ''}` : ''}</span>
                 </div>
-                {mine ? <div className="gdeckmain"><Jog rt={rt} disabled={!st.enabled || !track} /><CdjControls rt={rt} st={st} hasBpm={!!track?.bpm} /></div>
+                {mine ? <CdjControls rt={rt} st={st} hasBpm={!!track?.bpm} jog={<Jog rt={rt} disabled={!st.enabled || !track} />} />
                     : <div className="gwrap"><Wave rt={rt} id={id} /><Meter value={peaks} /></div>}
                 {mine && <div className="gwrap"><Wave rt={rt} id={id} /><Meter value={peaks} /></div>}
                 <div className="gmix">

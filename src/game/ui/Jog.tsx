@@ -31,7 +31,7 @@ export default function Jog({ rt, disabled }: { rt: GameRuntime; disabled: boole
 
     return (
         <div className={`gjog ${disabled ? 'off' : ''}`} ref={wheel} role="group" aria-label="jog wheel" tabIndex={disabled ? -1 : 0} data-testid="jog"
-            onPointerDown={e => { if (disabled || drag.current) return; e.currentTarget.setPointerCapture(e.pointerId); drag.current = { id: e.pointerId, last: angle(e) }; rt.act('jog.touch', 1); }}
+            onPointerDown={e => { if (disabled || drag.current) return; try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* capture is a nicety: the drag still works */ } drag.current = { id: e.pointerId, last: angle(e) }; rt.act('jog.touch', 1); }}
             onPointerMove={e => {
                 const d = drag.current; if (!d || d.id !== e.pointerId) return;
                 const a = angle(e); let dl = a - d.last; if (dl > Math.PI) dl -= 2 * Math.PI; if (dl < -Math.PI) dl += 2 * Math.PI; d.last = a;
