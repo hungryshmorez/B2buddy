@@ -8,6 +8,9 @@ import { MasterClock, phaseDiff } from './core/clock';
 import { CommandPort } from './core/commands';
 import { estimateBpm } from './core/analysis';
 import { Station } from './core/station';
+import { StorageCueStore } from './core/cueStore';
+import { DEFAULT_JOG, JogController, JogSettings } from './core/jog';
+import { computeWave, WaveData } from './core/waveform';
 import { bestRate } from './core/tempo';
 import { EqBand, GameTrack, MetaOrigin, StationId } from './core/types';
 import { MemoryStore } from './memory/store';
@@ -27,9 +30,17 @@ const ENGINE_KEY = 'b2buddy.engine.v1';
 export interface GameOptions { showDj1: Difficulty; showDj2: Difficulty; showSeconds: number; difficulty: Difficulty; challengeId: string; roundSeconds: number; bestOf: number; masterBpm: number; clickDuringRound: boolean }
 export const DEFAULT_OPTIONS: GameOptions = { showDj1: 'intermediate', showDj2: 'intermediate', showSeconds: 60, difficulty: 'intermediate', challengeId: 'standard', roundSeconds: 90, bestOf: 3, masterBpm: 124, clickDuringRound: false };
 
-/** rate <-> tempo fader (0..1, centre = normal speed, +-16%) */
-export const rateToFader = (r: number) => (r - 1) / 0.32 + 0.5;
-export const faderToRate = (f: number) => 1 + (f - 0.5) * 0.32;
+/** rate <-> tempo fader (0..1, centre = normal speed). The range is the full-scale swing each way: 0.06 / 0.10 / 0.16 (the original) / 0.5 (WIDE). */
+export const TEMPO_RANGES = [0.06, 0.1, 0.16, 0.5] as const;
+export const rateToFader = (r: number, range = 0.16) => Math.min(1, Math.max(0, (r - 1) / (2 * range) + 0.5));
+export const faderToRate = (f: number, range = 0.16) => 1 + (f - 0.5) * 2 * range;
+export const BEAT_JUMP_SIZES = [0.5, 1, 2, 4, 8, 16, 32, 64] as const;
+export const LOOP_SIZES = [0.25, 0.5, 1, 2, 4, 8, 16, 32] as const;
+/** Pitch bend of the - / + buttons while held. */
+export const PITCH_BEND_BUTTON = 0.08;
+const CDJ_KEY = 'b2buddy.cdj.v1';
+/** CDJ panel choices that outlive the page: jog feel, tempo range, selected beat-jump and loop sizes, MIDI jog resolution. */
+export interface CdjPrefs { jog: JogSettings; ticksPerTurn: number; tempoRange: number; beatJump: number; loopSize: number }
 
 /**
  * Everything the screens talk to. Owns the audio context, both stations, the battle session, Buddy, memory and MIDI. One instance per page.
@@ -72,14 +83,41 @@ export class GameRuntime {
     serviceUrl = DEFAULT_AIDJ_URL; serviceState: ServiceState = 'off'; serviceError = '';
     readonly analysis = new Map<string, ServiceAnalysis>();
     private tsBrain = new AiDjTsBrain(); private svc: AiDjServiceBrain | null = null; private masterStream: MediaStream | null = null; private storage: Pick<Storage, 'getItem' | 'setItem'>;
+    readonly cueStore: StorageCueStore;
+    jog!: JogController;
+    cdj: CdjPrefs = { jog: { ...DEFAULT_JOG }, ticksPerTurn: 256, tempoRange: 0.16, beatJump: 4, loopSize: 4 };
+    /** SHIFT held (hot-cue pads clear instead of jump) and the bend buttons currently held. */
+    shift = false; private bendHeld = new Set<string>();
     private lastBeat = Number.NaN; private lastScoreAt = 0; private marks = { buddy: 0, player: 0 };
 
     constructor(storage: Storage | { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void }) {
         this.storage = storage; this.loadEnginePrefs();
         this.memory = new MemoryStore(storage); this.supervisor = new Supervisor(this.memory);
+        this.cueStore = new StorageCueStore(storage); this.loadCdjPrefs();
         this.midi = new MidiService(browserMidiDeps(storage));
         this.midi.onAction((a, v) => this.act(a, v));
+        // losing focus must never leave a button held or the jog bent
+        if (typeof window !== 'undefined') window.addEventListener('blur', () => this.releaseAllInput());
         for (const t of DEMO_TRACKS) this.library.set(t.id, t);
+    }
+
+    private loadCdjPrefs() {
+        try {
+            const o = JSON.parse(this.storage.getItem(CDJ_KEY) ?? '{}') as Partial<CdjPrefs> & { jog?: Partial<JogSettings> };
+            const j: Partial<JogSettings> = o.jog ?? {};
+            this.cdj.jog = { mode: j.mode === 'vinyl' ? 'vinyl' : 'cdj', sensitivity: typeof j.sensitivity === 'number' ? j.sensitivity : 1, curve: j.curve === 'accel' ? 'accel' : 'linear', maxBend: typeof j.maxBend === 'number' ? j.maxBend : DEFAULT_JOG.maxBend };
+            if (typeof o.ticksPerTurn === 'number' && o.ticksPerTurn >= 16 && o.ticksPerTurn <= 4096) this.cdj.ticksPerTurn = o.ticksPerTurn;
+            if ((TEMPO_RANGES as readonly number[]).includes(o.tempoRange as number)) this.cdj.tempoRange = o.tempoRange as number;
+            if ((BEAT_JUMP_SIZES as readonly number[]).includes(o.beatJump as number)) this.cdj.beatJump = o.beatJump as number;
+            if ((LOOP_SIZES as readonly number[]).includes(o.loopSize as number)) this.cdj.loopSize = o.loopSize as number;
+        } catch { /* corrupt or blocked storage: defaults */ }
+    }
+    saveCdjPrefs() { this.jog?.configure(this.cdj.jog); this.cdj.jog = { ...(this.jog?.settings ?? this.cdj.jog) }; try { this.storage.setItem(CDJ_KEY, JSON.stringify(this.cdj)); } catch { /* storage blocked */ } this.emit(); }
+    /** Everything momentary back to neutral: held buttons (MIDI and keyboard), shift, bend, the jog, a loop roll or cue preview in progress. */
+    releaseAllInput() {
+        this.midi.releaseAll(); this.shift = false; this.bendHeld.clear(); this.jog?.release();
+        const st = this.stations?.player; if (st) { st.setBend(0); st.cueRelease(); st.hotCueRelease(); st.rollEnd(); }
+        this.emit();
     }
 
     private loadEnginePrefs() {
@@ -158,7 +196,8 @@ export class GameRuntime {
                 const b = this.ctx.createBuffer(1, data.length, this.ctx.sampleRate); b.getChannelData(0).set(data); this.buffers.set(spec.id, b);
             }
             this.backends = { player: new WebAudioBackend(this.ctx, this.bus, this.buffers), buddy: new WebAudioBackend(this.ctx, this.bus, this.buffers) };
-            this.stations = { player: new Station('player', this.backends.player), buddy: new Station('buddy', this.backends.buddy) };
+            this.stations = { player: new Station('player', this.backends.player, this.cueStore), buddy: new Station('buddy', this.backends.buddy) };
+            this.jog = new JogController(this.stations.player, this.cdj.jog);
             for (const id of ['player', 'buddy'] as const) this.stations[id].onEvent(e => {
                 if (e.type === 'load') this.events.emit({ type: 'track.loaded', station: id, trackId: e.trackId });
                 else if (e.type === 'play') this.events.emit({ type: 'mix.started', station: id, trackId: this.stations[id].state().trackId ?? '' });
@@ -288,6 +327,7 @@ export class GameRuntime {
     private update() {
         if (!this.ctx) return;
         this.session?.tick(); this.ai?.tick(); this.ai2?.tick();
+        this.jog?.tick(this.now);
         this.pumpEvents();
         this.scheduleClicks();
         if (this.message && performance.now() > this.messageUntil) { this.message = ''; }
@@ -346,12 +386,40 @@ export class GameRuntime {
             case 'volume': st.setVolume(value); break;
             case 'eq.low': case 'eq.mid': case 'eq.high': st.setEq(action.slice(3) as EqBand, value); break;
             case 'filter': st.setFilter(value); break;
-            case 'tempo': st.setRate(faderToRate(value)); break;
+            case 'tempo': st.setRate(faderToRate(value, this.cdj.tempoRange)); break;
             case 'master.volume': if (this.bus) this.bus.master.gain.value = value * 1.0; break;
             case 'matchTempo': return this.reportAction(this.matchTempo());
             case 'startOnBeat': return this.reportAction(this.startOnBeat());
             case 'align': return this.reportAction(this.align());
             case 'ready': if (this.mode === 'battle') return this.reportAction(this.readyUp()); break;
+            // ---- CDJ controls. value 1 = pressed, 0 = released for hold actions.
+            case 'cue.hold': if (value >= 0.5) { if (!need(!!s.trackId, 'Load a track first.')) return null; st.cuePress(); } else st.cueRelease(); break;
+            case 'bend.minus': case 'bend.plus': { if (value >= 0.5) this.bendHeld.add(action); else this.bendHeld.delete(action); st.setBend((this.bendHeld.has('bend.plus') ? PITCH_BEND_BUTTON : 0) - (this.bendHeld.has('bend.minus') ? PITCH_BEND_BUTTON : 0)); break; }
+            case 'jog': if (!need(!!s.trackId, 'Load a track first.')) return null; this.jog.move(value / this.cdj.ticksPerTurn, this.now); break;
+            case 'jog.touch': if (value >= 0.5) this.jog.touch(); else this.jog.release(); break;
+            case 'jog.search': this.jog.searching = value >= 0.5; break;
+            case 'shift': this.shift = value >= 0.5; break;
+            case 'tempo.range': { const i = TEMPO_RANGES.indexOf(this.cdj.tempoRange as (typeof TEMPO_RANGES)[number]); this.cdj.tempoRange = TEMPO_RANGES[(i + 1) % TEMPO_RANGES.length]; this.saveCdjPrefs(); break; }
+            case 'quantize': st.setQuantize(!s.quantize); break;
+            case 'beatjump.back': case 'beatjump.fwd': {
+                if (!need(!!s.trackId, 'Load a track first.')) return null;
+                if (!st.beatJump((action === 'beatjump.fwd' ? 1 : -1) * this.cdj.beatJump)) this.say('Beat jump needs a track with a known BPM (set it in the Tracks panel) and room to move.'); break;
+            }
+            case 'beatjump.size.up': case 'beatjump.size.down': { const i = BEAT_JUMP_SIZES.indexOf(this.cdj.beatJump as (typeof BEAT_JUMP_SIZES)[number]); this.cdj.beatJump = BEAT_JUMP_SIZES[Math.max(0, Math.min(BEAT_JUMP_SIZES.length - 1, i + (action.endsWith('up') ? 1 : -1)))]; this.saveCdjPrefs(); break; }
+            case 'loop.size.up': case 'loop.size.down': { const i = LOOP_SIZES.indexOf(this.cdj.loopSize as (typeof LOOP_SIZES)[number]); this.cdj.loopSize = LOOP_SIZES[Math.max(0, Math.min(LOOP_SIZES.length - 1, i + (action.endsWith('up') ? 1 : -1)))]; this.saveCdjPrefs(); break; }
+            case 'loop.in': if (!need(!!s.trackId, 'Load a track first.')) return null; st.loopIn(); break;
+            case 'loop.out': if (!need(!!s.trackId, 'Load a track first.')) return null; if (!st.loopOut()) this.say('Press LOOP IN first, then LOOP OUT later in the track.'); break;
+            case 'loop.exit': st.exitLoop(); break;
+            case 'loop.reloop': st.reloop(); break;
+            case 'loop.half': st.loopHalve(); break;
+            case 'loop.double': st.loopDouble(); break;
+            case 'loop.auto': if (!need(!!s.trackId, 'Load a track first.')) return null; if (s.loop?.active) st.exitLoop(); else if (!st.loopBeats(this.cdj.loopSize)) this.say('Loops by beat need a track with a known BPM. Use LOOP IN and LOOP OUT instead.'); break;
+            case 'loop.roll': if (value >= 0.5) { if (!st.rollStart(this.cdj.loopSize)) this.say('Loop roll needs a playing track with a known BPM.'); } else st.rollEnd(); break;
+            default:
+                if (action.startsWith('hotcue.')) {
+                    const i = Number(action.slice(7)) - 1;
+                    if (value >= 0.5) { if (!need(!!s.trackId, 'Load a track first.')) return null; if (this.shift) st.clearHotCue(i); else st.hotCuePress(i); } else st.hotCueRelease();
+                }
         }
         this.emit(); return null;
     }
@@ -384,6 +452,17 @@ export class GameRuntime {
     private currentTrack(): GameTrack | null { const id = this.stations.player.state().trackId; return id ? this.library.get(id) ?? null : null; }
 
     // ---------------------------------------------------------------- readouts
+    private waves = new Map<string, WaveData>();
+    /** The track's waveform peaks, computed once from the decoded audio. null until the track is decoded. */
+    wave(id: string): WaveData | null {
+        const hit = this.waves.get(id); if (hit) return hit;
+        const buf = this.buffers.get(id); if (!buf) return null;
+        const w = computeWave(this.pcm.get(id) ?? buf.getChannelData(0), buf.sampleRate); this.waves.set(id, w); return w;
+    }
+    /** Waveform click / drag: move the player's deck (the audio follows). Ignored when nobody controls a deck. */
+    seekPlayer(sec: number) { if (!this.ready || this.mode === 'menu' || this.mode === 'show') return false; return this.stations.player.seek(sec); }
+    /** Platter movement in turns (the on-screen jog and any other analogue source). */
+    jogTurns(turns: number) { if (!this.ready || this.mode === 'menu' || this.mode === 'show' || !this.stations.player.state().trackId) return; this.jog.move(turns, this.now); }
     meters() { return { player: this.backends.player.peak(this.scratch), buddy: this.backends.buddy.peak(this.scratch) }; }
     masterLevel() { if (!this.bus) return 0; const a = this.bus.analyser; const buf = this.scratch; a.getFloatTimeDomainData(buf as Float32Array<ArrayBuffer>); let p = 0; for (let i = 0; i < buf.length; i++) p = Math.max(p, Math.abs(buf[i])); return p; }
     waveform(station: StationId, out: Float32Array) { this.backends[station].analyser.getFloatTimeDomainData(out as Float32Array<ArrayBuffer>); }

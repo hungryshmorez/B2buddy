@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { GameRuntime } from '../runtime';
+import { GameRuntime, rateToFader } from '../runtime';
 import { Breakdown } from '../core/scoring';
 import StationPanel from './StationPanel';
 import Venue from './Venue';
@@ -36,19 +36,29 @@ function Results({ rt }: { rt: GameRuntime }) {
 export default function Arena({ rt, onExit }: { rt: GameRuntime; onExit: () => void }) {
     const s = rt.session; const practice = rt.mode === 'practice'; const show = rt.mode === 'show';
     useEffect(() => {
+        const HOT_KEYS = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i'];
+        const skip = (e: KeyboardEvent) => { const t = e.target as HTMLElement; return rt.mode === 'show' || t.tagName === 'SELECT' || (t.tagName === 'INPUT' && (t as HTMLInputElement).type !== 'range') || e.ctrlKey || e.metaKey || e.altKey; };
         const h = (e: KeyboardEvent) => {
-            if (rt.mode === 'show') return;                                  // no human controls in an AI show
-            const t = e.target as HTMLElement; if (t.tagName === 'SELECT' || (t.tagName === 'INPUT' && (t as HTMLInputElement).type !== 'range')) return;
-            const st = rt.stations.player.state(); const k = e.key; let handled = true;
-            if (k === ' ') rt.act('play'); else if (k === 'c' || k === 'C') rt.act('cue'); else if (k === 'm' || k === 'M') rt.act('matchTempo'); else if (k === 'b' || k === 'B') rt.act('startOnBeat'); else if (k === 'a' || k === 'A') rt.act('align');
+            if (skip(e)) return;                                             // no human controls in an AI show
+            const st = rt.stations.player.state(); const k = e.key; const lk = k.length === 1 ? k.toLowerCase() : k; let handled = true;
+            if (k === 'Shift') { if (!e.repeat) rt.act('shift', 1); return; }
+            if (HOT_KEYS.includes(lk)) { if (!e.repeat) rt.act(`hotcue.${HOT_KEYS.indexOf(lk) + 1}` as 'hotcue.1', 1); e.preventDefault(); return; }
+            if (k === ' ') rt.act('play'); else if (lk === 'c') { if (!e.repeat) rt.act('cue.hold', 1); } else if (lk === 'm') rt.act('matchTempo'); else if (lk === 'b') rt.act('startOnBeat'); else if (lk === 'a') rt.act('align')
+            else if (k === ',') rt.act('beatjump.back'); else if (k === '.') rt.act('beatjump.fwd'); else if (lk === 'l') rt.act('loop.auto'); else if (lk === 'x') rt.act('quantize')
+            else if (k === '-') { if (!e.repeat) rt.act('bend.minus', 1); } else if (k === '=' || k === '+') { if (!e.repeat) rt.act('bend.plus', 1); }
             else if (k === 'Enter') rt.act('ready'); else if (k === 'ArrowUp') rt.act('volume', Math.min(1, st.volume + 0.05)); else if (k === 'ArrowDown') rt.act('volume', Math.max(0, st.volume - 0.05));
-            else if (k === 'ArrowRight') rt.act('tempo', Math.min(1, (st.rate - 1) / 0.32 + 0.5 + 0.0156)); else if (k === 'ArrowLeft') rt.act('tempo', Math.max(0, (st.rate - 1) / 0.32 + 0.5 - 0.0156));
+            else if (k === 'ArrowRight') rt.act('tempo', Math.min(1, rateToFader(st.rate, rt.cdj.tempoRange) + 0.0156)); else if (k === 'ArrowLeft') rt.act('tempo', Math.max(0, rateToFader(st.rate, rt.cdj.tempoRange) - 0.0156));
             else if (k === '1' || k === '2' || k === '3') { const b = (['low', 'mid', 'high'] as const)[+k - 1]; rt.act(`eq.${b}` as 'eq.low', st.eq[b] < 0.1 ? 0.5 : 0); }
             else if (k === '[') rt.act('filter', Math.max(0, st.filter - 0.1)); else if (k === ']') rt.act('filter', Math.min(1, st.filter + 0.1)); else if (k === '\\') rt.act('filter', 0.5);
             else handled = false;
             if (handled) e.preventDefault();
         };
-        window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h);
+        const up = (e: KeyboardEvent) => {
+            if (rt.mode === 'show') return; const k = e.key; const lk = k.length === 1 ? k.toLowerCase() : k;
+            if (k === 'Shift') rt.act('shift', 0); else if (HOT_KEYS.includes(lk)) rt.act(`hotcue.${HOT_KEYS.indexOf(lk) + 1}` as 'hotcue.1', 0); else if (lk === 'c') rt.act('cue.hold', 0);
+            else if (k === '-') rt.act('bend.minus', 0); else if (k === '=' || k === '+') rt.act('bend.plus', 0);
+        };
+        window.addEventListener('keydown', h); window.addEventListener('keyup', up); return () => { window.removeEventListener('keydown', h); window.removeEventListener('keyup', up); };
     }, [rt]);
 
     const phase = s?.phase; const clock = s?.clock; const now = rt.now;
