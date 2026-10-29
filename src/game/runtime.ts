@@ -10,6 +10,7 @@ import { estimateBpm } from './core/analysis';
 import { Station } from './core/station';
 import { StorageCueStore } from './core/cueStore';
 import { DEFAULT_JOG, JogController, JogSettings } from './core/jog';
+import { computeWave, WaveData } from './core/waveform';
 import { bestRate } from './core/tempo';
 import { EqBand, GameTrack, MetaOrigin, StationId } from './core/types';
 import { MemoryStore } from './memory/store';
@@ -392,7 +393,7 @@ export class GameRuntime {
             case 'align': return this.reportAction(this.align());
             case 'ready': if (this.mode === 'battle') return this.reportAction(this.readyUp()); break;
             // ---- CDJ controls. value 1 = pressed, 0 = released for hold actions.
-            case 'cue.hold': if (!need(!!s.trackId, 'Load a track first.')) return null; if (value >= 0.5) st.cuePress(); else st.cueRelease(); break;
+            case 'cue.hold': if (value >= 0.5) { if (!need(!!s.trackId, 'Load a track first.')) return null; st.cuePress(); } else st.cueRelease(); break;
             case 'bend.minus': case 'bend.plus': { if (value >= 0.5) this.bendHeld.add(action); else this.bendHeld.delete(action); st.setBend((this.bendHeld.has('bend.plus') ? PITCH_BEND_BUTTON : 0) - (this.bendHeld.has('bend.minus') ? PITCH_BEND_BUTTON : 0)); break; }
             case 'jog': if (!need(!!s.trackId, 'Load a track first.')) return null; this.jog.move(value / this.cdj.ticksPerTurn, this.now); break;
             case 'jog.touch': if (value >= 0.5) this.jog.touch(); else this.jog.release(); break;
@@ -417,8 +418,7 @@ export class GameRuntime {
             default:
                 if (action.startsWith('hotcue.')) {
                     const i = Number(action.slice(7)) - 1;
-                    if (!need(!!s.trackId, 'Load a track first.')) return null;
-                    if (value >= 0.5) { if (this.shift) st.clearHotCue(i); else st.hotCuePress(i); } else st.hotCueRelease();
+                    if (value >= 0.5) { if (!need(!!s.trackId, 'Load a track first.')) return null; if (this.shift) st.clearHotCue(i); else st.hotCuePress(i); } else st.hotCueRelease();
                 }
         }
         this.emit(); return null;
@@ -452,6 +452,17 @@ export class GameRuntime {
     private currentTrack(): GameTrack | null { const id = this.stations.player.state().trackId; return id ? this.library.get(id) ?? null : null; }
 
     // ---------------------------------------------------------------- readouts
+    private waves = new Map<string, WaveData>();
+    /** The track's waveform peaks, computed once from the decoded audio. null until the track is decoded. */
+    wave(id: string): WaveData | null {
+        const hit = this.waves.get(id); if (hit) return hit;
+        const buf = this.buffers.get(id); if (!buf) return null;
+        const w = computeWave(this.pcm.get(id) ?? buf.getChannelData(0), buf.sampleRate); this.waves.set(id, w); return w;
+    }
+    /** Waveform click / drag: move the player's deck (the audio follows). Ignored when nobody controls a deck. */
+    seekPlayer(sec: number) { if (!this.ready || this.mode === 'menu' || this.mode === 'show') return false; return this.stations.player.seek(sec); }
+    /** Platter movement in turns (the on-screen jog and any other analogue source). */
+    jogTurns(turns: number) { if (!this.ready || this.mode === 'menu' || this.mode === 'show' || !this.stations.player.state().trackId) return; this.jog.move(turns, this.now); }
     meters() { return { player: this.backends.player.peak(this.scratch), buddy: this.backends.buddy.peak(this.scratch) }; }
     masterLevel() { if (!this.bus) return 0; const a = this.bus.analyser; const buf = this.scratch; a.getFloatTimeDomainData(buf as Float32Array<ArrayBuffer>); let p = 0; for (let i = 0; i < buf.length; i++) p = Math.max(p, Math.abs(buf[i])); return p; }
     waveform(station: StationId, out: Float32Array) { this.backends[station].analyser.getFloatTimeDomainData(out as Float32Array<ArrayBuffer>); }

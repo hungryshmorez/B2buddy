@@ -1,6 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { GameRuntime, faderToRate, rateToFader } from '../runtime';
 import { StationId } from '../core/types';
+import CdjControls from './CdjControls';
+import DeckWave from './DeckWave';
+import Jog from './Jog';
+import { fmtTime } from './cdjColors';
 
 const fmt = (s: number) => { s = Math.max(0, s); const m = Math.floor(s / 60); return `${m}:${Math.floor(s % 60).toString().padStart(2, '0')}`; };
 
@@ -29,7 +33,7 @@ function Meter({ value }: { value: number }) {
 
 /** One station: deck + mixer channel. The player's panel drives the real station; Buddy's panel shows the same state read-only. */
 export default function StationPanel({ rt, id, readOnly = false, label }: { rt: GameRuntime; id: StationId; readOnly?: boolean; label?: string }) {
-    const mine = id === 'player' && !readOnly;
+    const mine = id === 'player' && !readOnly; const [remain, setRemain] = useState(false);
     const st = rt.stations[id].state(); const track = st.trackId ? rt.library.get(st.trackId) ?? null : null;
     const peaks = rt.meters()[id];
     const eff = track?.bpm ? track.bpm * st.rate : null;
@@ -54,18 +58,19 @@ export default function StationPanel({ rt, id, readOnly = false, label }: { rt: 
                     <span>{track?.key ? `${track.key} (${track.keyOrigin})` : 'key unknown'}</span>
                     {track && <span>rate {(st.rate * 100).toFixed(1)}%</span>}
                 </div>
+                <DeckWave rt={rt} id={id} seekable={mine && st.enabled} />
                 <div className="gpos"><div className="gposfill" style={{ width: total ? (posInLoop / total * 100) + '%' : '0%' }} />
                     <span>{track ? (loop ? `bar ${bar ?? '-'} of ${Math.round(loop * (track.bpm ?? 120) / 240)} · phrase ${fmt(posInLoop)}` : `${fmt(posInLoop)} / -${fmt(total - posInLoop)}`) : '--'}</span></div>
-                <div className="gwrap"><Wave rt={rt} id={id} /><Meter value={peaks} /></div>
-                {mine && <div className="gbtns">
-                    <button onClick={() => act('play')} className={st.playing ? 'on' : ''} aria-label="play or pause">{st.playing ? 'PAUSE' : 'PLAY'}</button>
-                    <button onClick={() => act('cue')} aria-label="cue">CUE</button>
-                    <button onClick={() => act('matchTempo')} title="set this deck's tempo to the master tempo">MATCH TEMPO</button>
-                    <button onClick={() => act('startOnBeat')} title="start on the next bar line of the master clock">START ON BEAT</button>
-                    <button onClick={() => act('align')} title="nudge the playing deck onto the master beat">ALIGN</button>
-                </div>}
+                <div className="gtimes" aria-label="time display">
+                    <button className="gtimebtn" onClick={() => setRemain(r => !r)} aria-pressed={remain} title="switch between elapsed and remaining time" data-testid="time-toggle">{remain ? 'REMAIN' : 'ELAPSED'}</button>
+                    <b data-testid="time-readout">{track ? (remain ? '-' + fmtTime(total - posInLoop) : fmtTime(posInLoop)) : '--:--'}</b>
+                    <span>{track ? `${eff ? eff.toFixed(1) + ' BPM' : 'no BPM'}${track.key ? ' · ' + track.key : ''}` : ''}</span>
+                </div>
+                {mine ? <div className="gdeckmain"><Jog rt={rt} disabled={!st.enabled || !track} /><CdjControls rt={rt} st={st} hasBpm={!!track?.bpm} /></div>
+                    : <div className="gwrap"><Wave rt={rt} id={id} /><Meter value={peaks} /></div>}
+                {mine && <div className="gwrap"><Wave rt={rt} id={id} /><Meter value={peaks} /></div>}
                 <div className="gmix">
-                    {slider('TEMPO', rateToFader(st.rate), v => act('tempo', v), 'tempo fader')}
+                    {slider('TEMPO', rateToFader(st.rate, rt.cdj.tempoRange), v => act('tempo', v), 'tempo fader')}
                     {slider('LOW', st.eq.low, v => act('eq.low', v), 'low EQ')}{slider('MID', st.eq.mid, v => act('eq.mid', v), 'mid EQ')}{slider('HIGH', st.eq.high, v => act('eq.high', v), 'high EQ')}
                     {slider('FILTER', st.filter, v => act('filter', v), 'filter, left low-pass, right high-pass')}
                     {slider('VOLUME', st.volume, v => act('volume', v), 'channel volume')}
