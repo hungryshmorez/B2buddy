@@ -1,5 +1,5 @@
 import { StationBackend } from '../core/station';
-import { GameTrack } from '../core/types';
+import { GameTrack, LoopSpan } from '../core/types';
 
 const EQ_DB = (k: number) => (k <= 0.5 ? -26 + (k / 0.5) * 26 : ((k - 0.5) / 0.5) * 6);
 
@@ -23,6 +23,7 @@ export class WebAudioBackend implements StationBackend {
     readonly low: BiquadFilterNode; readonly mid: BiquadFilterNode; readonly high: BiquadFilterNode; readonly filt: BiquadFilterNode; readonly vol: GainNode; readonly analyser: AnalyserNode;
     private readonly head: GainNode;
     private rate = 1;
+    private userLoop: LoopSpan | null = null;
     constructor(private readonly ctx: AudioContext, bus: MasterBus, private readonly buffers: Map<string, AudioBuffer>) {
         this.head = ctx.createGain();
         this.low = ctx.createBiquadFilter(); this.low.type = 'lowshelf'; this.low.frequency.value = 200;
@@ -39,12 +40,19 @@ export class WebAudioBackend implements StationBackend {
         this.stopSrc();
         const buf = this.track ? this.buffers.get(this.track.id) : undefined; if (!buf || !this.track) return;
         const s = this.ctx.createBufferSource(); s.buffer = buf; this.rate = rate; s.playbackRate.value = rate;
-        if (this.track.loopSec) { s.loop = true; s.loopStart = 0; s.loopEnd = this.track.loopSec; }
+        this.applyLoop(s);
         s.connect(this.head);
         const off = this.track.loopSec ? offsetSec % this.track.loopSec : Math.min(offsetSec, Math.max(0, buf.duration - 0.001));
         s.start(Math.max(atTime, this.ctx.currentTime), off); this.src = s;
     }
     onStop() { this.stopSrc(); }
+    /** User loop in track seconds. Applied live to the running source (no restart, so no click) and remembered for the next start. */
+    onLoop(loop: LoopSpan | null) { this.userLoop = loop; if (this.src) this.applyLoop(this.src); }
+    private applyLoop(s: AudioBufferSourceNode) {
+        if (this.userLoop) { s.loopStart = this.userLoop.start; s.loopEnd = this.userLoop.end; s.loop = true; }
+        else if (this.track?.loopSec) { s.loopStart = 0; s.loopEnd = this.track.loopSec; s.loop = true; }
+        else { s.loop = false; }
+    }
     private stopSrc() { if (this.src) { try { this.src.stop(); } catch { /* already stopped */ } this.src.disconnect(); this.src = null; } }
     onRate(rate: number) { this.rate = rate; this.src?.playbackRate.setValueAtTime(rate, this.ctx.currentTime); }
     onParam(name: 'volume' | 'low' | 'mid' | 'high' | 'filter', v: number) {

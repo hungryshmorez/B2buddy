@@ -1,6 +1,6 @@
 # Controlled public beta: plan, evidence and what is still unknown
 
-Status: **prepared, not published.** No Pages site exists (the URL returned 404 when checked), the workflow has never run, and nothing here has been deployed. A URL is only reported after a deployment succeeds.
+Status: **deployed** to https://hungryshmorez.github.io/B2buddy/ (the path is case-sensitive: capital B). Deployed from `main` at fe6c55a by the Pages workflow; verified by running the full browser integration suite against that live URL (52/52, no Python service).
 
 ## 1. What works without the Python service (measured)
 `e2e/integration.mjs` was run in Chromium against a production build served under the Pages-style subpath `/b2buddy/` with **no Python service**: **52 of 52 checks passed, 1 skipped** (the one skipped check is the real-service connection and measurement). Software GL, so this proves function, not speed.
@@ -33,7 +33,7 @@ Steps only you can do (they change the public repository and need your permissio
 1. Review PR #2 and merge it (into `develop`). Keep PR #1 and the `main` baseline as they are until you decide.
 2. Repository **Settings → Pages → Source: GitHub Actions**.
 3. The `github-pages` environment normally only allows deployments from the default branch. Either get the workflow onto the default branch, or add the branch you want under Settings → Environments → github-pages → Deployment branches. A `workflow_dispatch` workflow also has to exist on the default branch to be started from the Actions tab.
-4. Run **Actions → Deploy browser build to GitHub Pages**. The expected address is `https://hungryshmorez.github.io/b2buddy/`; it is confirmed only if the run succeeds and the page loads.
+4. Run **Actions → Deploy browser build to GitHub Pages**. The expected address is `https://hungryshmorez.github.io/B2buddy/` (confirmed live).
 
 ## 4. Measuring performance on real hardware
 Software GL in CI gave about 20 fps for the game canvas and 4-6 fps from BENDR. **That says nothing about a real GPU.** The arena now has a **PERFORMANCE** button (or add `?perf` to the URL) that shows measured numbers and a **COPY REPORT** button: game-canvas fps, p95 and worst frame time, frames over 50 ms, the frame rate BENDR actually outputs, audio base/output latency, the WebGL renderer string (tells you real GPU vs software) and the browser.

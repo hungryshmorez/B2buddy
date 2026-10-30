@@ -12,7 +12,8 @@
     "test:service": "python -m unittest services/aidj/test_service.py",
     "e2e:show": "node e2e/show.mjs",
     "e2e:integration": "node e2e/integration.mjs",
-    "e2e:perf": "node e2e/perf.mjs"
+    "e2e:perf": "node e2e/perf.mjs",
+    "e2e:cdj": "node e2e/cdj.mjs"
   },
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",
